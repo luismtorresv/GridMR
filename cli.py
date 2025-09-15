@@ -55,20 +55,12 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def parse_args():
-    """
-    Parse arguments from the command line.
-    """
-    parser = build_parser()
-    return parser.parse_args()
-
-
 def main():
     """
     Dispatch based on the worker type.
     """
-    args = parse_args()
-    print(type(args))
+    parser = build_parser()
+    args = parser.parse_args()
     match args.role:
         case "client":
             handle_client(args)
