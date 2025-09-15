@@ -55,7 +55,7 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main():
+def main() -> None:
     """
     Dispatch based on the worker type.
     """
