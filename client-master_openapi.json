@@ -1,0 +1,241 @@
+{
+    "openapi": "3.1.0",
+    "info": {
+        "title": "MapReduce Master API",
+        "version": "0.2.0"
+    },
+    "paths": {
+        "/": {
+            "get": {
+                "summary": "Health Check",
+                "operationId": "health_check",
+                "responses": {
+                    "200": {
+                        "description": "API is reachable",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "status": {
+                                            "type": "string",
+                                            "example": "ok"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/job/submit": {
+            "post": {
+                "summary": "Submit a new job",
+                "operationId": "submit_job",
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "data_url": {
+                                        "type": "string",
+                                        "format": "uri"
+                                    },
+                                    "code_url": {
+                                        "type": "string",
+                                        "format": "uri"
+                                    },
+                                    "job_name": {
+                                        "type": "string"
+                                    }
+                                },
+                                "required": [
+                                    "data_url",
+                                    "code_url"
+                                ]
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "201": {
+                        "description": "Job accepted",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "job_id": {
+                                            "type": "string"
+                                        },
+                                        "status": {
+                                            "type": "string",
+                                            "example": "submitted"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid job submission"
+                    }
+                }
+            }
+        },
+        "/job/status/{job_id}": {
+            "get": {
+                "summary": "Get job status",
+                "operationId": "get_job_status",
+                "parameters": [
+                    {
+                        "name": "job_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Job status response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "job_id": {
+                                            "type": "string"
+                                        },
+                                        "status": {
+                                            "type": "string",
+                                            "enum": [
+                                                "submitted",
+                                                "running",
+                                                "completed",
+                                                "failed"
+                                            ]
+                                        },
+                                        "progress": {
+                                            "type": "number",
+                                            "minimum": 0,
+                                            "maximum": 100
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Job not found"
+                    }
+                }
+            }
+        },
+        "/job/result/{job_id}": {
+            "get": {
+                "summary": "Get job result",
+                "operationId": "get_job_result",
+                "parameters": [
+                    {
+                        "name": "job_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Result available",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "job_id": {
+                                            "type": "string"
+                                        },
+                                        "result_url": {
+                                            "type": "string",
+                                            "format": "uri"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "202": {
+                        "description": "Result not ready"
+                    },
+                    "404": {
+                        "description": "Job not found"
+                    }
+                }
+            }
+        },
+        "/job/cancel/{job_id}": {
+            "post": {
+                "summary": "Cancel a running job",
+                "operationId": "cancel_job",
+                "parameters": [
+                    {
+                        "name": "job_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Job cancelled",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "job_id": {
+                                            "type": "string"
+                                        },
+                                        "status": {
+                                            "type": "string",
+                                            "example": "cancelled"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Job not found"
+                    },
+                    "409": {
+                        "description": "Job already completed or failed"
+                    }
+                }
+            }
+        }
+    },
+    "components": {
+        "schemas": {
+            "Error": {
+                "type": "object",
+                "properties": {
+                    "detail": {
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "detail"
+                ]
+            }
+        }
+    }
+}
