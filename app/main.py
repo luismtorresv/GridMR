@@ -4,9 +4,9 @@
 
 from __future__ import annotations
 
-from typing import Optional
 
-from fastapi import FastAPI
+from fastapi import FastAPI, status
+from fastapi.responses import JSONResponse
 
 from models import (
     HealthCheck,
@@ -61,10 +61,21 @@ def get_job_status(job_id: str) -> JobStatusJobIdGetResponse:
 @app.post(
     "/job/submit",
     response_model=None,
-    responses={"201": {"model": JobSubmitPostResponse}},
+    responses={
+        "201": {
+            "model": JobSubmitPostResponse,
+            "description": "Job accepted",
+        },
+        "400": {"description": "Invalid job submission"},
+    },
 )
-def submit_job(body: JobSubmitPostRequest) -> Optional[JobSubmitPostResponse]:
+def submit_job(body: JobSubmitPostRequest) -> JSONResponse:
     """
     Submit a new job
     """
-    pass
+    return JSONResponse(
+        content=JobSubmitPostResponse(
+            job_id="1", status="doing fine why thank you"
+        ).model_dump(),
+        status_code=status.HTTP_201_CREATED,
+    )

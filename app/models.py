@@ -7,7 +7,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Optional
 
-from pydantic import AnyUrl, BaseModel, Field, confloat
+from pydantic import FileUrl, BaseModel, Field, confloat
 
 
 class Error(BaseModel):
@@ -19,8 +19,8 @@ class HealthCheck(BaseModel):
 
 
 class JobSubmitPostRequest(BaseModel):
-    data_url: AnyUrl
-    code_url: AnyUrl
+    data_url: FileUrl
+    code_url: FileUrl
     job_name: Optional[str] = None
 
 
@@ -44,7 +44,7 @@ class JobStatusJobIdGetResponse(BaseModel):
 
 class JobResultJobIdGetResponse(BaseModel):
     job_id: Optional[str] = None
-    result_url: Optional[AnyUrl] = None
+    result_url: Optional[FileUrl] = None
 
 
 class JobCancelJobIdPostResponse(BaseModel):
