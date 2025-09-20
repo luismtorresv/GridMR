@@ -3,19 +3,15 @@
 #   timestamp: 2025-09-17T03:29:58+00:00
 
 from __future__ import annotations
-from enum import Enum
-from fastapi import FastAPI, status, BackgroundTasks
-from fastapi.responses import JSONResponse
-import uuid
 
-from models import (
-    HealthCheck,
-    JobCancelJobIdPostResponse,
-    JobResultJobIdGetResponse,
-    JobStatusJobIdGetResponse,
-    JobSubmitPostRequest,
-    JobSubmitPostResponse,
-)
+import uuid
+from enum import Enum
+
+from fastapi import BackgroundTasks, FastAPI, status
+from fastapi.responses import JSONResponse
+from models import (HealthCheck, JobCancelJobIdPostResponse,
+                    JobResultJobIdGetResponse, JobStatusJobIdGetResponse,
+                    JobSubmitPostRequest, JobSubmitPostResponse)
 
 app = FastAPI(
     title="MapReduce Master API",

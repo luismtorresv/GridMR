@@ -7,7 +7,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Optional
 
-from pydantic import FileUrl, BaseModel, Field, confloat
+from pydantic import BaseModel, Field, FileUrl, confloat
 
 
 class Error(BaseModel):
