@@ -1,7 +1,7 @@
 import argparse
 
-import mr.openapi_client as openapi_client
-from mr.openapi_client.models import SubmitJobRequest
+import client.openapi_client as openapi_client
+from client.openapi_client.models import SubmitJobRequest
 
 
 class Client:
