@@ -18,8 +18,8 @@ from .models import (
     JobStatusJobIdGetResponse,
     JobSubmitPostRequest,
     JobSubmitPostResponse,
-    RegisterWorkerRequest,
-    RegisterWorkerResponse,
+    # RegisterWorkerRequest,
+    # RegisterWorkerResponse,
 )
 
 
@@ -117,21 +117,21 @@ app = FastAPI(
     version="0.2.0",
 )
 
-@app.post("/worker/register")
-async def register_worker(request: Request,  body: RegisterWorkerRequest):
-    """
-    Register a worker machine.
-    The worker's listening port should be sent as a query parameter.
-    Example: POST /worker/register?port=8001
-    """
-    worker_url = f"http://{request.client.host}:{request.client.port}"
-    worker_type = body.worker_type
-    response = master_instance.register_worker(worker_url,worker_type)
+# @app.post("/worker/register")
+# async def register_worker(request: Request,  body: RegisterWorkerRequest):
+#     """
+#     Register a worker machine.
+#     The worker's listening port should be sent as a query parameter.
+#     Example: POST /worker/register?port=8001
+#     """
+#     worker_url = f"http://{request.client.host}:{request.client.port}"
+#     worker_type = body.worker_type
+#     response = master_instance.register_worker(worker_url,worker_type)
 
-    return JSONResponse(content=RegisterWorkerResponse(
-        worker_url=worker_url,
-        worker_status= response
-    ))
+#     return JSONResponse(content=RegisterWorkerResponse(
+#         worker_url=worker_url,
+#         worker_status= response
+#     ))
     
 
 
