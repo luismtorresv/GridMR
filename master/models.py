@@ -53,4 +53,9 @@ class JobCancelJobIdPostResponse(BaseModel):
 
 
 class RegisterWorkerRequest(BaseModel):
-    worker_url: AnyHttpUrl
+    worker_type: str
+
+class RegisterWorkerResponse(BaseModel):
+    worker_url: Optional[str] = None
+    worker_status: Optional[str] = None
+

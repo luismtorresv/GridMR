@@ -5,24 +5,23 @@ from client.openapi_client.models import SubmitJobRequest
 
 
 class Client:
-    def __init__(self, ip_address: str):
-        self.configuration = openapi_client.Configuration(host=ip_address)
+    def __init__(self, master_ip_address: str):
+        self.configuration = openapi_client.Configuration(host=master_ip_address)
+        self.api_client = openapi_client.ApiClient(self.configuration)
+        self.api = openapi_client.DefaultApi(self.api_client)
 
     def submit(self, code_url: str, data_url: str):
-        with openapi_client.ApiClient(self.configuration) as api_client:
-            api_instance = openapi_client.DefaultApi(api_client)
-            try:
-                api_response = api_instance.submit_job(
-                    submit_job_request=SubmitJobRequest(
-                        code_url=code_url,
-                        data_url=data_url,
-                    )
+        try:
+            api_response = self.api.submit_job(
+                submit_job_request=SubmitJobRequest(
+                    code_url=code_url,
+                    data_url=data_url,
                 )
+            )
+            return api_response
 
-                return api_response
-
-            except openapi_client.rest.ApiException as e:
-                print(e)
+        except openapi_client.rest.ApiException as e:
+            print(e)
 
 
 def handle_client(args: argparse.Namespace):

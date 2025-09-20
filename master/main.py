@@ -7,7 +7,7 @@ from __future__ import annotations
 import argparse
 import uuid
 from enum import Enum
-from fastapi import BackgroundTasks, FastAPI, status
+from fastapi import BackgroundTasks, FastAPI, Request, status
 from fastapi.responses import JSONResponse
 from pathlib import Path
 from urllib.parse import urlparse, urlunparse
@@ -18,6 +18,8 @@ from .models import (
     JobStatusJobIdGetResponse,
     JobSubmitPostRequest,
     JobSubmitPostResponse,
+    RegisterWorkerRequest,
+    RegisterWorkerResponse,
 )
 
 
@@ -30,11 +32,13 @@ class STATUS(str, Enum):
     RUNNING = "RUNNING"
     STOPPED = "STOPPED"
     INACTIVE = "DONE"
+    BUSY = "BUSY"
+    AVAILABLE = "AVAILABLE"
 
 
 class Master:
     def __init__(self):
-        self.job_status = {}
+        self.jobs = {}
         self.workers = {}
 
     # This was made with GPT, it resolves the URL so it can find the folder while no using an abs path.
@@ -51,16 +55,37 @@ class Master:
 
     def create_job(self):
         job_id = str(uuid.uuid4())
-        self.job_status[job_id] = STATUS.STARTED
+        self.jobs[job_id] = {'status':STATUS.STARTED,'Errors': None }
 
         return job_id
 
-    def register_worker(self, worker_url):
-        self.workers.append(worker_url)
+    def register_worker(self, worker_url,worker_type):
+        if worker_url in self.workers:
+            return "worker already exists"
+        
+        self.workers[worker_url] = {
+            "status": STATUS.AVAILABLE, 
+            "type": worker_type,
+        }
+            
+        return "succesfully created"
+
+    def assign_job_to_worker(self, file_url: str) -> bool:
+        """
+        Assigns a file to an available worker and communicates with it through OpenAPI.
+        Returns True if assignment was successful, False otherwise.
+        """
+        available_workers = [url for url, info in self.workers.items() if info["status"] == STATUS.AVAILABLE]
+        if not available_workers:
+            return False
+            
+        # Simple round-robin assignment
+        worker_url = available_workers[0]
+
 
     def begin_job(self, body: JobSubmitPostRequest, job_id: str):
 
-        self.job_status[job_id] = STATUS.RUNNING
+        self.jobs[job_id]["status"] = STATUS.RUNNING
 
         # Checking the specified directory and counting the files inside.
         try:
@@ -75,10 +100,11 @@ class Master:
                 urlunparse(("file", "", str(f.resolve()), "", "", "")) for f in files
             ]
 
+            # Try to assign each file to an available worker
             for file_url in file_urls:
-                print(file_url)
-
-            print(f"Number of files in directory: {file_count}")
+                #worker_response = self.assign_job_to_worker(file_url)
+                pass
+                
 
         except Exception as e:
             self.job_status[job_id] = STATUS.STOPPED
@@ -91,14 +117,22 @@ app = FastAPI(
     version="0.2.0",
 )
 
-
 @app.post("/worker/register")
-def register_worker():
+async def register_worker(request: Request,  body: RegisterWorkerRequest):
     """
-    Register a worker machine
+    Register a worker machine.
+    The worker's listening port should be sent as a query parameter.
+    Example: POST /worker/register?port=8001
     """
+    worker_url = f"http://{request.client.host}:{request.client.port}"
+    worker_type = body.worker_type
+    response = master_instance.register_worker(worker_url,worker_type)
 
-    pass
+    return JSONResponse(content=RegisterWorkerResponse(
+        worker_url=worker_url,
+        worker_status= response
+    ))
+    
 
 
 @app.get(
@@ -157,7 +191,8 @@ def submit_job(
 
     return JSONResponse(
         content=JobSubmitPostResponse(
-            job_id=job_id, status="Job started successfully"
+            job_id=job_id, 
+            status="Job started successfully",
         ).model_dump(),
         status_code=status.HTTP_201_CREATED,
     )
