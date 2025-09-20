@@ -15,7 +15,6 @@ class Client:
                     submit_job_request=SubmitJobRequest(
                         code_url=code_url,
                         data_url=data_url,
-                        job_name="Just testing it out",
                     )
                 )
 
@@ -28,4 +27,3 @@ class Client:
 def handle_client(args: argparse.Namespace):
     client = Client(args.ip_address)
     response = client.submit(args.code_url, args.data_url)
-    print(response)

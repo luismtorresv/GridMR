@@ -3,10 +3,10 @@
 #   timestamp: 2025-09-17T03:29:58+00:00
 
 from __future__ import annotations
-
-
-from fastapi import FastAPI, status
+from enum import Enum
+from fastapi import FastAPI, status, BackgroundTasks
 from fastapi.responses import JSONResponse
+import uuid
 
 from models import (
     HealthCheck,
@@ -21,6 +21,32 @@ app = FastAPI(
     title="MapReduce Master API",
     version="0.2.0",
 )
+
+
+class JobStatus(str, Enum):
+    RUNNING = "RUNNING"
+    STOPPED = "STOPPED"
+    INACTIVE = "INACTIVE"
+
+
+class Master:
+
+    job_status = {}
+
+    def begin_job(self, body: JobSubmitPostRequest):
+        # Print the parsed request body
+        job_id = str(uuid.uuid4())
+        text_directory_url = body.data_url
+        code_url = body.code_url
+
+        self.job_status[job_id] = JobStatus.RUNNING
+
+        return JSONResponse(
+            content=JobSubmitPostResponse(
+                job_id=job_id, status="Job started"
+            ).model_dump(),
+            status_code=status.HTTP_201_CREATED,
+        )
 
 
 @app.get(
@@ -69,13 +95,15 @@ def get_job_status(job_id: str) -> JobStatusJobIdGetResponse:
         "400": {"description": "Invalid job submission"},
     },
 )
-def submit_job(body: JobSubmitPostRequest) -> JSONResponse:
+def submit_job(
+    body: JobSubmitPostRequest, background_tasks: BackgroundTasks
+) -> JSONResponse:
     """
     Submit a new job
     """
-    return JSONResponse(
-        content=JobSubmitPostResponse(
-            job_id="1", status="doing fine why thank you"
-        ).model_dump(),
-        status_code=status.HTTP_201_CREATED,
-    )
+
+    master_instance = Master()
+
+    response = master_instance.begin_job(body)
+
+    return response
