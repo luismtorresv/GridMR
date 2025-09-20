@@ -10,7 +10,7 @@ from enum import Enum
 
 from fastapi import BackgroundTasks, FastAPI, status
 from fastapi.responses import JSONResponse
-from models import (
+from .models import (
     HealthCheck,
     JobCancelJobIdPostResponse,
     JobResultJobIdGetResponse,
