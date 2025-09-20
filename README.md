@@ -31,8 +31,16 @@
 
 ## 2. Description
 
- Distributed grid processing system based on the MapReduce programming paradigm
- popularised by Google in the early 2000s.
+This project is a humble implementation of a distributed system for data
+processing based on the MapReduce programming paradigm popularized by Google in
+the early 2000s. As those familiar with the paper might know, this setup is
+meant to be used in a cluster environment. However, to sprinkle around something
+less orthodox, we are doing it in a _grid_ (hence the name “GridMR”).
+
+We have organized the project as a monorepo where you have the Python scripts
+for all actors in the network. The following sections describe project-related
+minutia (dependencies, how to run it, and so on) as well as higher-level
+architectural decisions.
 
 ## 3. Requirements
 
