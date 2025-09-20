@@ -4,19 +4,29 @@
 
 from __future__ import annotations
 
+import argparse
 import uuid
 from enum import Enum
 
 from fastapi import BackgroundTasks, FastAPI, status
 from fastapi.responses import JSONResponse
-from models import (HealthCheck, JobCancelJobIdPostResponse,
-                    JobResultJobIdGetResponse, JobStatusJobIdGetResponse,
-                    JobSubmitPostRequest, JobSubmitPostResponse)
+from models import (
+    HealthCheck,
+    JobCancelJobIdPostResponse,
+    JobResultJobIdGetResponse,
+    JobStatusJobIdGetResponse,
+    JobSubmitPostRequest,
+    JobSubmitPostResponse,
+)
 
 app = FastAPI(
     title="MapReduce Master API",
     version="0.2.0",
 )
+
+
+def handle_master(args: argparse.Namespace) -> None:
+    raise NotImplementedError
 
 
 class JobStatus(str, Enum):
@@ -26,8 +36,8 @@ class JobStatus(str, Enum):
 
 
 class Master:
-
-    job_status = {}
+    def __init__(self):
+        self.job_status = {}
 
     def begin_job(self, body: JobSubmitPostRequest):
         # Print the parsed request body
@@ -98,8 +108,6 @@ def submit_job(
     Submit a new job
     """
 
-    master_instance = Master()
-
-    response = master_instance.begin_job(body)
-
+    master = Master()
+    response = master.begin_job(body)
     return response

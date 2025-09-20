@@ -6,7 +6,7 @@ This is the single entrypoint.
 import argparse
 
 from client import handle_client
-# from master import handle_master
+from master import handle_master
 from worker import handle_worker
 
 
