@@ -10,7 +10,9 @@ from enum import Enum
 
 from fastapi import BackgroundTasks, FastAPI, status
 from fastapi.responses import JSONResponse
-from .models import (
+from pathlib import Path
+from urllib.parse import urlparse
+from models import (
     HealthCheck,
     JobCancelJobIdPostResponse,
     JobResultJobIdGetResponse,
@@ -19,40 +21,53 @@ from .models import (
     JobSubmitPostResponse,
 )
 
-app = FastAPI(
-    title="MapReduce Master API",
-    version="0.2.0",
-)
-
 
 def handle_master(args: argparse.Namespace) -> None:
     raise NotImplementedError
 
 
-class JobStatus(str, Enum):
+class STATUS(str, Enum):
+    STARTED = "STARTED"
     RUNNING = "RUNNING"
     STOPPED = "STOPPED"
-    INACTIVE = "INACTIVE"
+    INACTIVE = "DONE"
 
 
 class Master:
     def __init__(self):
         self.job_status = {}
 
-    def begin_job(self, body: JobSubmitPostRequest):
-        # Print the parsed request body
+    def create_job(self):
         job_id = str(uuid.uuid4())
-        text_directory_url = body.data_url
-        code_url = body.code_url
+        self.job_status[job_id] = STATUS.STARTED
 
-        self.job_status[job_id] = JobStatus.RUNNING
+        return job_id
 
-        return JSONResponse(
-            content=JobSubmitPostResponse(
-                job_id=job_id, status="Job started"
-            ).model_dump(),
-            status_code=status.HTTP_201_CREATED,
-        )
+    def begin_job(self, body: JobSubmitPostRequest, job_id: str):
+
+        self.job_status[job_id] = STATUS.RUNNING
+
+        # Checking the specified directory and counting the files inside.
+        try:
+
+            dir_path = Path(
+                urlparse(str(body.data_url)).path
+            ).resolve()  # Must turn the FILE_URL type to string, and then to an actual path
+
+            file_count = sum(1 for f in dir_path.iterdir() if f.is_file())
+
+            print(f"Number of files in directory: {file_count}")
+
+        except Exception as e:
+            self.job_status[job_id] = STATUS.STOPPED
+            print(e)
+
+
+master_instance = Master()
+app = FastAPI(
+    title="MapReduce Master API",
+    version="0.2.0",
+)
 
 
 @app.get(
@@ -83,11 +98,9 @@ def get_job_result(job_id: str) -> JobResultJobIdGetResponse:
 
 
 @app.get("/job/status/{job_id}", response_model=JobStatusJobIdGetResponse)
-def get_job_status(job_id: str) -> JobStatusJobIdGetResponse:
-    """
-    Get job status
-    """
-    pass
+def get_job_status(self, job_id: str) -> JobStatusJobIdGetResponse:
+
+    status = master_instance.job_status.get(job_id)
 
 
 @app.post(
@@ -107,7 +120,11 @@ def submit_job(
     """
     Submit a new job
     """
+    job_id = master_instance.create_job()
 
-    master = Master()
-    response = master.begin_job(body)
-    return response
+    background_tasks.add_task(master_instance.begin_job, body, job_id)
+
+    return JSONResponse(
+        content=JobSubmitPostResponse(job_id=job_id, status="Job started").model_dump(),
+        status_code=status.HTTP_201_CREATED,
+    )
