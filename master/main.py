@@ -7,12 +7,11 @@ from __future__ import annotations
 import argparse
 import uuid
 from enum import Enum
-
 from fastapi import BackgroundTasks, FastAPI, status
 from fastapi.responses import JSONResponse
 from pathlib import Path
-from urllib.parse import urlparse
-from models import (
+from urllib.parse import urlparse, urlunparse
+from .models import (
     HealthCheck,
     JobCancelJobIdPostResponse,
     JobResultJobIdGetResponse,
@@ -36,6 +35,19 @@ class STATUS(str, Enum):
 class Master:
     def __init__(self):
         self.job_status = {}
+        self.workers = {}
+
+    # This was made with GPT, it resolves the URL so it can find the folder while no using an abs path.
+    def resolve_path(self, data_url):
+        file_url = urlparse(str(data_url))
+        host = file_url.netloc or "localhost"
+        raw_path = file_url.path.lstrip("/")  # prevent leading slash confusion
+
+        if host in ("localhost", "127.0.0.1"):
+            # Resolve against current working dir
+            return Path(raw_path).resolve()
+        else:
+            raise ValueError(f"Remote host {host} not supported yet")
 
     def create_job(self):
         job_id = str(uuid.uuid4())
@@ -43,18 +55,28 @@ class Master:
 
         return job_id
 
+    def register_worker(self, worker_url):
+        self.workers.append(worker_url)
+
     def begin_job(self, body: JobSubmitPostRequest, job_id: str):
 
         self.job_status[job_id] = STATUS.RUNNING
 
         # Checking the specified directory and counting the files inside.
         try:
+            dir_path = self.resolve_path(body.data_url)
 
-            dir_path = Path(
-                urlparse(str(body.data_url)).path
-            ).resolve()  # Must turn the FILE_URL type to string, and then to an actual path
+            files = [f for f in dir_path.iterdir() if f.is_file()]
+            file_count = len(files)
 
-            file_count = sum(1 for f in dir_path.iterdir() if f.is_file())
+            # According to the source, "Without this conversion, your API would return system-dependent paths (like /home/user/test_folder/file1.txt),
+            # which might not match the file:// style your client expects."
+            file_urls = [
+                urlunparse(("file", "", str(f.resolve()), "", "", "")) for f in files
+            ]
+
+            for file_url in file_urls:
+                print(file_url)
 
             print(f"Number of files in directory: {file_count}")
 
@@ -68,6 +90,15 @@ app = FastAPI(
     title="MapReduce Master API",
     version="0.2.0",
 )
+
+
+@app.post("/worker/register")
+def register_worker():
+    """
+    Register a worker machine
+    """
+
+    pass
 
 
 @app.get(
@@ -125,6 +156,8 @@ def submit_job(
     background_tasks.add_task(master_instance.begin_job, body, job_id)
 
     return JSONResponse(
-        content=JobSubmitPostResponse(job_id=job_id, status="Job started").model_dump(),
+        content=JobSubmitPostResponse(
+            job_id=job_id, status="Job started successfully"
+        ).model_dump(),
         status_code=status.HTTP_201_CREATED,
     )
