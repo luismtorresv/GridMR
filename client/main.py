@@ -1,7 +1,10 @@
 import argparse
+import os
 import time
 import sys
 import requests
+from pathlib import Path
+from urllib.parse import urlparse, urlunparse
 
 # We'll bypass the OpenAPI client validation by using direct HTTP requests
 # import client.openapi_client as openapi_client
@@ -15,13 +18,37 @@ class Client:
             master_ip_address = f"http://{master_ip_address}:8000"
 
         self.base_url = master_ip_address
+        
+    def _make_file_url(self, path: str) -> str:
+        """Convert a relative or absolute path to a proper file:// URL"""
+        # If it's already a URL, return it
+        if path.startswith(("http://", "https://", "file://")):
+            return path
+            
+        # If it's a special command like 'wordcount', return as is
+        if "/" not in path and "\\" not in path:
+            return path
+            
+        # Convert relative path to absolute
+        abs_path = str(Path(path).resolve())
+        
+        # Convert to file:// URL
+        return urlunparse(("file", "", abs_path, "", "", ""))
 
     def submit(self, code_url: str, data_url: str, job_name: str = None):
         """Submit job using direct HTTP requests to bypass OpenAPI validation"""
         try:
-            # Construct the job submission data directly
+            # Convert paths to proper URLs
+            code_url = self._make_file_url(code_url)
+            data_url = self._make_file_url(data_url)
+            
+            print(f"Converted URLs:")
+            print(f"Code URL: {code_url}")
+            print(f"Data URL: {data_url}")
+            
+            # Construct the job submission data
             job_data = {
-                "code_url": code_url,  # This can be "wordcount" or any string
+                "code_url": code_url,
                 "data_url": data_url,
                 "job_name": job_name or f"job_{int(time.time())}",
             }
