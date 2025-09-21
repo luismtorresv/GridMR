@@ -96,21 +96,29 @@ class TaskTracker:
                 end = task.split_end or len(lines)
                 lines = lines[start:end]
 
-                # Group output by partition (hash of key)
+                # SHUFFLE STEP: Group output by partition (hash of key)
+                # Use consistent number of reducers for proper key distribution
+                num_reducers = 4  # Standard number of reduce partitions
                 partitions: Dict[int, List[KeyValue]] = {}
 
                 for line_num, line in enumerate(lines, start):
-                    # Call mapper
+                    # Call mapper to get key-value pairs
                     for kv in mapper.map(line_num, line.strip()):
-                        # Partition based on key hash
-                        partition = hash(str(kv.key)) % 4  # Default 4 partitions
+                        # CRITICAL: Partition based on key hash (shuffle step)
+                        # This ensures same keys go to same reducer
+                        key_hash = hash(str(kv.key))
+                        partition = key_hash % num_reducers
+
                         if partition not in partitions:
                             partitions[partition] = []
                         partitions[partition].append(kv)
 
-                # Write partitioned output
+                # Write partitioned output (sorted by key within each partition)
                 output_files = []
                 for partition_id, kvs in partitions.items():
+                    # SORT STEP: Sort by key within each partition
+                    kvs.sort(key=lambda x: str(x.key))
+
                     output_file = os.path.join(
                         intermediate_dir, f"map_{task.task_id}_part_{partition_id}.txt"
                     )

@@ -102,14 +102,16 @@ class Master:
             raise ValueError(f"Remote host {host} not supported yet")
 
     def create_job(self, data_url: str, code_url: str, job_name: str = None) -> str:
-        job_id = str(uuid.uuid4())
+        # Generate shorter, cleaner job ID (8 characters instead of full UUID)
+        job_id = str(uuid.uuid4()).split("-")[0]  # Use first part of UUID
 
         # Resolve input files
         input_dir = self.resolve_path(data_url)
         input_files = [str(f) for f in input_dir.iterdir() if f.is_file()]
 
-        # Create output directory
-        output_dir = str(input_dir.parent / f"output_{job_id}")
+        # Create cleaner output directory structure: output/{job_id}
+        base_output_dir = Path.cwd() / "output"
+        output_dir = str(base_output_dir / job_id)
 
         job_tracker = JobTracker(job_id, input_files, output_dir, code_url)
         self.jobs[job_id] = job_tracker
@@ -406,7 +408,7 @@ class Master:
             while not await self.check_map_tasks_completion(job_tracker):
                 job_tracker.progress = (
                     len(job_tracker.completed_map_tasks) / len(job_tracker.map_tasks)
-                ) * 50  # Map phase is 50% of job
+                ) * 40  # Map phase is 40% of job
                 await asyncio.sleep(5)
 
             print(f"Map phase completed for job {job_id}")
@@ -416,23 +418,71 @@ class Master:
 
             # Wait for reduce tasks to complete
             while not await self.check_reduce_tasks_completion(job_tracker):
-                map_progress = 50  # Map phase completed
+                map_progress = 40  # Map phase completed
                 reduce_progress = (
                     len(job_tracker.completed_reduce_tasks)
                     / len(job_tracker.reduce_tasks)
-                ) * 50
+                ) * 40  # Reduce phase is 40%
                 job_tracker.progress = map_progress + reduce_progress
                 await asyncio.sleep(5)
 
+            print(f"Reduce phase completed for job {job_id}")
+
+            # Phase 3: Final consolidation - merge all reduce outputs into single file
+            await self.consolidate_final_output(job_tracker)
+            job_tracker.progress = 100.0
+
             # Job completed
             job_tracker.status = STATUS.COMPLETED
-            job_tracker.progress = 100.0
             print(f"Job {job_id} completed successfully")
 
         except Exception as e:
             job_tracker.status = STATUS.FAILED
             job_tracker.error_message = str(e)
             print(f"Job {job_id} failed: {e}")
+
+    async def consolidate_final_output(self, job_tracker: JobTracker):
+        """Consolidate all reduce outputs into a single final result file"""
+        try:
+            reduce_output_dir = f"{job_tracker.output_dir}/reduce_output"
+            final_output_file = f"{job_tracker.output_dir}/result.txt"
+
+            # Collect all reduce output files
+            reduce_files = []
+            for partition_file in os.listdir(reduce_output_dir):
+                if partition_file.startswith("part-") and partition_file.endswith(
+                    ".txt"
+                ):
+                    reduce_files.append(os.path.join(reduce_output_dir, partition_file))
+
+            # Sort files to ensure consistent ordering
+            reduce_files.sort()
+
+            # Merge all reduce outputs into single file, sorted by key
+            all_results = []
+            for reduce_file in reduce_files:
+                with open(reduce_file, "r") as f:
+                    for line in f:
+                        line = line.strip()
+                        if line:
+                            parts = line.split("\t", 1)
+                            if len(parts) == 2:
+                                key, value = parts
+                                all_results.append((key, value))
+
+            # Sort final results by key for consistent output
+            all_results.sort(key=lambda x: x[0])
+
+            # Write consolidated results
+            with open(final_output_file, "w") as f:
+                for key, value in all_results:
+                    f.write(f"{key}\t{value}\n")
+
+            print(f"Consolidated {len(all_results)} results into {final_output_file}")
+
+        except Exception as e:
+            print(f"Error consolidating final output: {e}")
+            raise
 
 
 master_instance = Master()
