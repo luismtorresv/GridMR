@@ -9,6 +9,7 @@ import asyncio
 import uuid
 import time
 import requests
+import os
 from enum import Enum
 from typing import Dict, List, Optional
 from fastapi import BackgroundTasks, FastAPI, Request, status, HTTPException
@@ -233,18 +234,35 @@ class Master:
                         if response.status_code == 200:
                             task_status = response.json()
                             if task_status["status"] == "COMPLETED":
-                                # Create a mock TaskResult for completed task
+                                # Get the actual result with output files from the worker
+                                if "result" in task_status and task_status["result"]:
+                                    result_data = task_status["result"]
+                                    output_files = result_data.get("output_files", [])
+                                else:
+                                    # Fallback: construct expected output file paths
+                                    intermediate_dir = f"{job_tracker.output_dir}/map_output/intermediate"
+                                    output_files = []
+                                    import glob
+
+                                    pattern = (
+                                        f"{intermediate_dir}/map_{task_id}_part_*.txt"
+                                    )
+                                    output_files = glob.glob(pattern)
+
                                 result = TaskResult(
                                     task_id=task_id,
                                     task_type=TaskType.MAP,
                                     status=TaskStatus.COMPLETED,
-                                    output_files=[],
+                                    output_files=output_files,  # Include actual output files
                                     worker_id=worker_id,
                                 )
                                 job_tracker.completed_map_tasks[task_id] = result
                                 worker.status = STATUS.AVAILABLE
                                 if task_id in worker.current_tasks:
                                     worker.current_tasks.remove(task_id)
+                                print(
+                                    f"Map task {task_id} completed with {len(output_files)} output files"
+                                )
                             else:
                                 all_completed = False
                         else:
@@ -259,24 +277,59 @@ class Master:
 
     async def create_reduce_tasks(self, job_tracker: JobTracker):
         """Create and assign reduce tasks after map phase completes"""
-        # Create reduce tasks (simplified - using 2 reduce tasks)
-        num_reducers = 2
+        # Collect actual intermediate files from completed map tasks
+        intermediate_files = []
+        for task_result in job_tracker.completed_map_tasks.values():
+            intermediate_files.extend(task_result.output_files)
 
-        for i in range(num_reducers):
-            task_id = f"{job_tracker.job_id}_reduce_{i}"
-            # In real implementation, would collect intermediate files from map tasks
-            input_files = [
-                f"{job_tracker.output_dir}/map_output/intermediate/map_*_part_{i}.txt"
-            ]
+        print(
+            f"DEBUG: Found {len(intermediate_files)} intermediate files from map tasks"
+        )
+        for file_path in intermediate_files:
+            print(f"DEBUG: Intermediate file: {file_path}")
+
+        # Group files by partition ID
+        partitions: Dict[int, List[str]] = {}
+        for file_path in intermediate_files:
+            if os.path.exists(file_path):
+                # Extract partition ID from filename (e.g., map_task_id_part_0.txt)
+                filename = os.path.basename(file_path)
+                if "_part_" in filename:
+                    try:
+                        partition_id = int(filename.split("_part_")[1].split(".")[0])
+                        if partition_id not in partitions:
+                            partitions[partition_id] = []
+                        partitions[partition_id].append(file_path)
+                        print(f"DEBUG: Assigned {filename} to partition {partition_id}")
+                    except (ValueError, IndexError):
+                        print(
+                            f"Warning: Could not parse partition from filename: {filename}"
+                        )
+            else:
+                print(f"Warning: Intermediate file does not exist: {file_path}")
+
+        print(f"DEBUG: Created {len(partitions)} partitions: {list(partitions.keys())}")
+
+        # Create reduce task for each partition that has files
+        for partition_id, files in partitions.items():
+            task_id = f"{job_tracker.job_id}_reduce_{partition_id}"
+
+            # Ensure output directory exists
+            os.makedirs(f"{job_tracker.output_dir}/reduce_output", exist_ok=True)
 
             task = ReduceTask(
                 task_id=task_id,
-                input_files=input_files,
-                output_file=f"{job_tracker.output_dir}/reduce_output/part-{i:05d}.txt",
+                input_files=files,
+                output_file=f"{job_tracker.output_dir}/reduce_output/part-{partition_id:05d}.txt",
                 reducer_code=job_tracker.code_url,
-                partition_id=i,
+                partition_id=partition_id,
             )
             job_tracker.reduce_tasks[task_id] = task
+            print(f"DEBUG: Created reduce task {task_id} with {len(files)} input files")
+
+        print(
+            f"Created {len(job_tracker.reduce_tasks)} reduce tasks for {len(intermediate_files)} intermediate files"
+        )
 
         # Assign reduce tasks to workers
         available_workers = self.get_available_workers()
@@ -295,6 +348,11 @@ class Master:
                     worker_index += 1
                 else:
                     print(f"Failed to assign reduce task {task_id}")
+            else:
+                print("No available workers for reduce tasks")
+                job_tracker.status = STATUS.FAILED
+                job_tracker.error_message = "No available workers for reduce phase"
+                return
 
     async def check_reduce_tasks_completion(self, job_tracker: JobTracker) -> bool:
         """Check if all reduce tasks are completed"""

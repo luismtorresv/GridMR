@@ -14,7 +14,7 @@ from pathlib import Path
 class GridMRTester:
     def __init__(self):
         self.base_dir = Path(__file__).parent
-        self.test_data_dir = self.base_dir / "test_folder"
+        self.test_data_dir = self.base_dir / "demo_data"
         self.master_process = None
         self.worker_processes = []
         self.master_url = "http://localhost:8000"

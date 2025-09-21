@@ -96,6 +96,9 @@ class Worker:
                     "task_id": task_id,
                     "status": result.status.value,
                     "progress": 100 if result.status == TaskStatus.COMPLETED else 50,
+                    "result": result.model_dump()
+                    if result.status == TaskStatus.COMPLETED
+                    else None,  # Include full result data
                 }
             else:
                 raise HTTPException(status_code=404, detail="Task not found")
