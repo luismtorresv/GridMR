@@ -7,7 +7,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Optional
 
-from pydantic import AnyHttpUrl, BaseModel, Field, FileUrl, confloat
+from pydantic import BaseModel, Field, FileUrl, confloat
 
 
 class Error(BaseModel):
@@ -20,7 +20,7 @@ class HealthCheck(BaseModel):
 
 class JobSubmitPostRequest(BaseModel):
     data_url: FileUrl
-    code_url: FileUrl
+    code_url: str  # Changed from FileUrl to str to accept job type identifiers
     job_name: Optional[str] = None
 
 
@@ -55,7 +55,7 @@ class JobCancelJobIdPostResponse(BaseModel):
 class RegisterWorkerRequest(BaseModel):
     worker_type: str
 
+
 class RegisterWorkerResponse(BaseModel):
     worker_url: Optional[str] = None
     worker_status: Optional[str] = None
-

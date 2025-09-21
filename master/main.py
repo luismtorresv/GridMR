@@ -5,12 +5,16 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import uuid
+import time
+import requests
 from enum import Enum
-from fastapi import BackgroundTasks, FastAPI, Request, status
+from typing import Dict, List, Optional
+from fastapi import BackgroundTasks, FastAPI, Request, status, HTTPException
 from fastapi.responses import JSONResponse
 from pathlib import Path
-from urllib.parse import urlparse, urlunparse
+from urllib.parse import urlparse
 from .models import (
     HealthCheck,
     JobCancelJobIdPostResponse,
@@ -18,28 +22,66 @@ from .models import (
     JobStatusJobIdGetResponse,
     JobSubmitPostRequest,
     JobSubmitPostResponse,
-    # RegisterWorkerRequest,
-    # RegisterWorkerResponse,
+    RegisterWorkerRequest,
+    RegisterWorkerResponse,
 )
+
+from mapreduce.types import MapTask, ReduceTask, TaskResult, TaskStatus, TaskType
 
 
 def handle_master(args: argparse.Namespace) -> None:
-    raise NotImplementedError
+    import uvicorn
+
+    config = uvicorn.Config(app=app, host="0.0.0.0", port=args.port, log_level="info")
+    server = uvicorn.Server(config)
+    asyncio.run(server.serve())
 
 
 class STATUS(str, Enum):
     STARTED = "STARTED"
     RUNNING = "RUNNING"
     STOPPED = "STOPPED"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
     INACTIVE = "DONE"
     BUSY = "BUSY"
     AVAILABLE = "AVAILABLE"
 
 
+class WorkerInfo:
+    def __init__(self, worker_id: str, worker_url: str, worker_type: str):
+        self.worker_id = worker_id
+        self.worker_url = worker_url
+        self.worker_type = worker_type
+        self.status = STATUS.AVAILABLE
+        self.last_heartbeat = time.time()
+        self.current_tasks: List[str] = []
+
+
+class JobTracker:
+    """Tracks and orchestrates MapReduce jobs"""
+
+    def __init__(
+        self, job_id: str, input_files: List[str], output_dir: str, code_url: str
+    ):
+        self.job_id = job_id
+        self.input_files = input_files
+        self.output_dir = output_dir
+        self.code_url = code_url
+        self.status = STATUS.STARTED
+        self.map_tasks: Dict[str, MapTask] = {}
+        self.reduce_tasks: Dict[str, ReduceTask] = {}
+        self.completed_map_tasks: Dict[str, TaskResult] = {}
+        self.completed_reduce_tasks: Dict[str, TaskResult] = {}
+        self.assigned_tasks: Dict[str, str] = {}  # task_id -> worker_id
+        self.progress = 0.0
+        self.error_message: Optional[str] = None
+
+
 class Master:
     def __init__(self):
-        self.jobs = {}
-        self.workers = {}
+        self.jobs: Dict[str, JobTracker] = {}
+        self.workers: Dict[str, WorkerInfo] = {}
 
     # This was made with GPT, it resolves the URL so it can find the folder while no using an abs path.
     def resolve_path(self, data_url):
@@ -53,62 +95,281 @@ class Master:
         else:
             raise ValueError(f"Remote host {host} not supported yet")
 
-    def create_job(self):
+    def create_job(self, data_url: str, code_url: str, job_name: str = None) -> str:
         job_id = str(uuid.uuid4())
-        self.jobs[job_id] = {'status':STATUS.STARTED,'Errors': None }
+
+        # Resolve input files
+        input_dir = self.resolve_path(data_url)
+        input_files = [str(f) for f in input_dir.iterdir() if f.is_file()]
+
+        # Create output directory
+        output_dir = str(input_dir.parent / f"output_{job_id}")
+
+        job_tracker = JobTracker(job_id, input_files, output_dir, code_url)
+        self.jobs[job_id] = job_tracker
 
         return job_id
 
-    def register_worker(self, worker_url,worker_type):
-        if worker_url in self.workers:
+    def register_worker(self, worker_id: str, worker_url: str, worker_type: str) -> str:
+        if worker_id in self.workers:
             return "worker already exists"
-        
-        self.workers[worker_url] = {
-            "status": STATUS.AVAILABLE, 
-            "type": worker_type,
-        }
-            
-        return "succesfully created"
 
-    def assign_job_to_worker(self, file_url: str) -> bool:
-        """
-        Assigns a file to an available worker and communicates with it through OpenAPI.
-        Returns True if assignment was successful, False otherwise.
-        """
-        available_workers = [url for url, info in self.workers.items() if info["status"] == STATUS.AVAILABLE]
-        if not available_workers:
-            return False
-            
-        # Simple round-robin assignment
-        worker_url = available_workers[0]
+        worker_info = WorkerInfo(worker_id, worker_url, worker_type)
+        self.workers[worker_id] = worker_info
+        print(f"Registered worker {worker_id} at {worker_url}")
 
+        return "successfully created"
 
-    def begin_job(self, body: JobSubmitPostRequest, job_id: str):
+    def update_worker_heartbeat(
+        self, worker_id: str, status: str, current_tasks: List[dict]
+    ):
+        """Update worker heartbeat and status"""
+        if worker_id in self.workers:
+            worker = self.workers[worker_id]
+            worker.last_heartbeat = time.time()
+            worker.status = status
+            worker.current_tasks = [task.get("task_id", "") for task in current_tasks]
 
-        self.jobs[job_id]["status"] = STATUS.RUNNING
+    def get_available_workers(self) -> List[WorkerInfo]:
+        """Get list of available workers"""
+        current_time = time.time()
+        available = []
 
-        # Checking the specified directory and counting the files inside.
+        for worker in self.workers.values():
+            # Check if worker is available and hasn't timed out (5 minutes)
+            if (
+                worker.status == STATUS.AVAILABLE
+                and current_time - worker.last_heartbeat < 300
+            ):
+                available.append(worker)
+
+        return available
+
+    async def assign_task_to_worker(
+        self, task: MapTask | ReduceTask, worker: WorkerInfo
+    ) -> bool:
+        """Assign a task to a specific worker"""
         try:
-            dir_path = self.resolve_path(body.data_url)
+            task_data = {
+                "task_type": "MAP" if isinstance(task, MapTask) else "REDUCE",
+                "task_data": task.model_dump(),
+            }
 
-            files = [f for f in dir_path.iterdir() if f.is_file()]
-            file_count = len(files)
+            response = requests.post(
+                f"{worker.worker_url}/task/execute", json=task_data, timeout=30
+            )
 
-            # According to the source, "Without this conversion, your API would return system-dependent paths (like /home/user/test_folder/file1.txt),
-            # which might not match the file:// style your client expects."
-            file_urls = [
-                urlunparse(("file", "", str(f.resolve()), "", "", "")) for f in files
-            ]
+            if response.status_code == 200:
+                result = response.json()
+                if result["status"] != "FAILED":
+                    worker.status = STATUS.BUSY
+                    worker.current_tasks.append(task.task_id)
+                    return True
 
-            # Try to assign each file to an available worker
-            for file_url in file_urls:
-                #worker_response = self.assign_job_to_worker(file_url)
-                pass
-                
+            return False
 
         except Exception as e:
-            self.job_status[job_id] = STATUS.STOPPED
-            print(e)
+            print(
+                f"Error assigning task {task.task_id} to worker {worker.worker_id}: {e}"
+            )
+            return False
+
+    async def create_map_tasks(self, job_tracker: JobTracker):
+        """Create and assign map tasks for a job"""
+        job_tracker.status = STATUS.RUNNING
+
+        # Create map tasks
+        for i, input_file in enumerate(job_tracker.input_files):
+            task_id = f"{job_tracker.job_id}_map_{i}"
+            task = MapTask(
+                task_id=task_id,
+                input_file=input_file,
+                output_dir=f"{job_tracker.output_dir}/map_output",
+                mapper_code=job_tracker.code_url,
+            )
+            job_tracker.map_tasks[task_id] = task
+
+        # Assign tasks to workers
+        available_workers = self.get_available_workers()
+        worker_index = 0
+
+        for task_id, task in job_tracker.map_tasks.items():
+            if available_workers:
+                worker = available_workers[worker_index % len(available_workers)]
+                success = await self.assign_task_to_worker(task, worker)
+
+                if success:
+                    job_tracker.assigned_tasks[task_id] = worker.worker_id
+                    print(f"Assigned map task {task_id} to worker {worker.worker_id}")
+                    worker_index += 1
+                else:
+                    print(f"Failed to assign map task {task_id}")
+            else:
+                print("No available workers for map tasks")
+                job_tracker.status = STATUS.FAILED
+                job_tracker.error_message = "No available workers"
+                return
+
+    async def check_map_tasks_completion(self, job_tracker: JobTracker) -> bool:
+        """Check if all map tasks are completed"""
+        all_completed = True
+
+        for task_id in job_tracker.map_tasks.keys():
+            if task_id not in job_tracker.completed_map_tasks:
+                # Check task status with assigned worker
+                worker_id = job_tracker.assigned_tasks.get(task_id)
+                if worker_id and worker_id in self.workers:
+                    worker = self.workers[worker_id]
+                    try:
+                        response = requests.get(
+                            f"{worker.worker_url}/task/status/{task_id}", timeout=10
+                        )
+
+                        if response.status_code == 200:
+                            task_status = response.json()
+                            if task_status["status"] == "COMPLETED":
+                                # Create a mock TaskResult for completed task
+                                result = TaskResult(
+                                    task_id=task_id,
+                                    task_type=TaskType.MAP,
+                                    status=TaskStatus.COMPLETED,
+                                    output_files=[],
+                                    worker_id=worker_id,
+                                )
+                                job_tracker.completed_map_tasks[task_id] = result
+                                worker.status = STATUS.AVAILABLE
+                                if task_id in worker.current_tasks:
+                                    worker.current_tasks.remove(task_id)
+                            else:
+                                all_completed = False
+                        else:
+                            all_completed = False
+                    except Exception as e:
+                        print(f"Error checking task {task_id} status: {e}")
+                        all_completed = False
+                else:
+                    all_completed = False
+
+        return all_completed
+
+    async def create_reduce_tasks(self, job_tracker: JobTracker):
+        """Create and assign reduce tasks after map phase completes"""
+        # Create reduce tasks (simplified - using 2 reduce tasks)
+        num_reducers = 2
+
+        for i in range(num_reducers):
+            task_id = f"{job_tracker.job_id}_reduce_{i}"
+            # In real implementation, would collect intermediate files from map tasks
+            input_files = [
+                f"{job_tracker.output_dir}/map_output/intermediate/map_*_part_{i}.txt"
+            ]
+
+            task = ReduceTask(
+                task_id=task_id,
+                input_files=input_files,
+                output_file=f"{job_tracker.output_dir}/reduce_output/part-{i:05d}.txt",
+                reducer_code=job_tracker.code_url,
+                partition_id=i,
+            )
+            job_tracker.reduce_tasks[task_id] = task
+
+        # Assign reduce tasks to workers
+        available_workers = self.get_available_workers()
+        worker_index = 0
+
+        for task_id, task in job_tracker.reduce_tasks.items():
+            if available_workers:
+                worker = available_workers[worker_index % len(available_workers)]
+                success = await self.assign_task_to_worker(task, worker)
+
+                if success:
+                    job_tracker.assigned_tasks[task_id] = worker.worker_id
+                    print(
+                        f"Assigned reduce task {task_id} to worker {worker.worker_id}"
+                    )
+                    worker_index += 1
+                else:
+                    print(f"Failed to assign reduce task {task_id}")
+
+    async def check_reduce_tasks_completion(self, job_tracker: JobTracker) -> bool:
+        """Check if all reduce tasks are completed"""
+        all_completed = True
+
+        for task_id in job_tracker.reduce_tasks.keys():
+            if task_id not in job_tracker.completed_reduce_tasks:
+                worker_id = job_tracker.assigned_tasks.get(task_id)
+                if worker_id and worker_id in self.workers:
+                    worker = self.workers[worker_id]
+                    try:
+                        response = requests.get(
+                            f"{worker.worker_url}/task/status/{task_id}", timeout=10
+                        )
+
+                        if response.status_code == 200:
+                            task_status = response.json()
+                            if task_status["status"] == "COMPLETED":
+                                result = TaskResult(
+                                    task_id=task_id,
+                                    task_type=TaskType.REDUCE,
+                                    status=TaskStatus.COMPLETED,
+                                    output_files=[],
+                                    worker_id=worker_id,
+                                )
+                                job_tracker.completed_reduce_tasks[task_id] = result
+                                worker.status = STATUS.AVAILABLE
+                                if task_id in worker.current_tasks:
+                                    worker.current_tasks.remove(task_id)
+                            else:
+                                all_completed = False
+                        else:
+                            all_completed = False
+                    except Exception as e:
+                        print(f"Error checking reduce task {task_id} status: {e}")
+                        all_completed = False
+                else:
+                    all_completed = False
+
+        return all_completed
+
+    async def orchestrate_job(self, job_id: str):
+        """Main job orchestration logic"""
+        job_tracker = self.jobs[job_id]
+
+        try:
+            # Phase 1: Map tasks
+            await self.create_map_tasks(job_tracker)
+
+            # Wait for map tasks to complete
+            while not await self.check_map_tasks_completion(job_tracker):
+                job_tracker.progress = (
+                    len(job_tracker.completed_map_tasks) / len(job_tracker.map_tasks)
+                ) * 50  # Map phase is 50% of job
+                await asyncio.sleep(5)
+
+            print(f"Map phase completed for job {job_id}")
+
+            # Phase 2: Reduce tasks
+            await self.create_reduce_tasks(job_tracker)
+
+            # Wait for reduce tasks to complete
+            while not await self.check_reduce_tasks_completion(job_tracker):
+                map_progress = 50  # Map phase completed
+                reduce_progress = (
+                    len(job_tracker.completed_reduce_tasks)
+                    / len(job_tracker.reduce_tasks)
+                ) * 50
+                job_tracker.progress = map_progress + reduce_progress
+                await asyncio.sleep(5)
+
+            # Job completed
+            job_tracker.status = STATUS.COMPLETED
+            job_tracker.progress = 100.0
+            print(f"Job {job_id} completed successfully")
+
+        except Exception as e:
+            job_tracker.status = STATUS.FAILED
+            job_tracker.error_message = str(e)
+            print(f"Job {job_id} failed: {e}")
 
 
 master_instance = Master()
@@ -117,22 +378,38 @@ app = FastAPI(
     version="0.2.0",
 )
 
-# @app.post("/worker/register")
-# async def register_worker(request: Request,  body: RegisterWorkerRequest):
-#     """
-#     Register a worker machine.
-#     The worker's listening port should be sent as a query parameter.
-#     Example: POST /worker/register?port=8001
-#     """
-#     worker_url = f"http://{request.client.host}:{request.client.port}"
-#     worker_type = body.worker_type
-#     response = master_instance.register_worker(worker_url,worker_type)
 
-#     return JSONResponse(content=RegisterWorkerResponse(
-#         worker_url=worker_url,
-#         worker_status= response
-#     ))
-    
+@app.post("/worker/register")
+async def register_worker(request: Request, body: RegisterWorkerRequest):
+    """
+    Register a worker machine.
+    """
+    client_host = request.client.host
+    # Extract worker info from request headers or generate ID
+    worker_id = request.headers.get("X-Worker-ID", f"worker_{uuid.uuid4().hex[:8]}")
+    worker_url = request.headers.get("X-Worker-URL", f"http://{client_host}:8001")
+
+    response = master_instance.register_worker(worker_id, worker_url, body.worker_type)
+
+    return JSONResponse(
+        content=RegisterWorkerResponse(
+            worker_url=worker_url, worker_status=response
+        ).model_dump()
+    )
+
+
+@app.post("/worker/heartbeat")
+async def worker_heartbeat(heartbeat_data: dict):
+    """
+    Receive heartbeat from worker
+    """
+    worker_id = heartbeat_data.get("worker_id")
+    status = heartbeat_data.get("status", "AVAILABLE")
+    current_tasks = heartbeat_data.get("current_tasks", [])
+
+    master_instance.update_worker_heartbeat(worker_id, status, current_tasks)
+
+    return {"status": "ok"}
 
 
 @app.get(
@@ -151,7 +428,12 @@ def cancel_job(job_id: str) -> JobCancelJobIdPostResponse:
     """
     Cancel a running job
     """
-    pass
+    if job_id in master_instance.jobs:
+        job_tracker = master_instance.jobs[job_id]
+        job_tracker.status = STATUS.STOPPED
+        return JobCancelJobIdPostResponse(job_id=job_id, status="cancelled")
+    else:
+        raise HTTPException(status_code=404, detail="Job not found")
 
 
 @app.get("/job/result/{job_id}", response_model=JobResultJobIdGetResponse)
@@ -159,13 +441,40 @@ def get_job_result(job_id: str) -> JobResultJobIdGetResponse:
     """
     Get job result
     """
-    pass
+    if job_id not in master_instance.jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    job_tracker = master_instance.jobs[job_id]
+
+    if job_tracker.status == STATUS.COMPLETED:
+        result_url = f"file://{job_tracker.output_dir}/reduce_output/"
+        return JobResultJobIdGetResponse(job_id=job_id, result_url=result_url)
+    elif job_tracker.status in [STATUS.RUNNING, STATUS.STARTED]:
+        raise HTTPException(status_code=202, detail="Job still running")
+    else:
+        raise HTTPException(status_code=404, detail="Job result not available")
 
 
 @app.get("/job/status/{job_id}", response_model=JobStatusJobIdGetResponse)
-def get_job_status(self, job_id: str) -> JobStatusJobIdGetResponse:
+def get_job_status(job_id: str) -> JobStatusJobIdGetResponse:
+    """
+    Get job status
+    """
+    if job_id not in master_instance.jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
 
-    status = master_instance.job_status.get(job_id)
+    job_tracker = master_instance.jobs[job_id]
+
+    # Map internal status to API status
+    api_status = job_tracker.status.lower()
+    if api_status == "started":
+        api_status = "submitted"
+    elif api_status == "stopped":
+        api_status = "failed"
+
+    return JobStatusJobIdGetResponse(
+        job_id=job_id, status=api_status, progress=job_tracker.progress
+    )
 
 
 @app.post(
@@ -185,14 +494,22 @@ def submit_job(
     """
     Submit a new job
     """
-    job_id = master_instance.create_job()
+    try:
+        job_id = master_instance.create_job(
+            data_url=str(body.data_url),
+            code_url=str(body.code_url),
+            job_name=body.job_name,
+        )
 
-    background_tasks.add_task(master_instance.begin_job, body, job_id)
+        # Start job orchestration in background
+        background_tasks.add_task(master_instance.orchestrate_job, job_id)
 
-    return JSONResponse(
-        content=JobSubmitPostResponse(
-            job_id=job_id, 
-            status="Job started successfully",
-        ).model_dump(),
-        status_code=status.HTTP_201_CREATED,
-    )
+        return JSONResponse(
+            content=JobSubmitPostResponse(
+                job_id=job_id,
+                status="Job started successfully",
+            ).model_dump(),
+            status_code=status.HTTP_201_CREATED,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))

@@ -45,8 +45,7 @@
                                         "format": "uri"
                                     },
                                     "code_url": {
-                                        "type": "string",
-                                        "format": "uri"
+                                        "type": "string"
                                     },
                                     "job_name": {
                                         "type": "string"

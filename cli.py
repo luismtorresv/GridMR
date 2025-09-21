@@ -5,9 +5,9 @@ This is the single entrypoint.
 
 import argparse
 
-from client import handle_client
-from master import handle_master
-from worker import handle_worker
+from client.main import handle_client
+from master.main import handle_master
+from worker.main import handle_worker
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -46,11 +46,11 @@ def build_parser() -> argparse.ArgumentParser:
     worker_parser = subparsers.add_parser(
         "worker", help="Run as worker (to process jobs)"
     )
-    worker_parser.add_argument(
-        "worker_type", choices=["mapper", "reducer"], help="Type of worker"
-    )
     worker_parser.add_argument("master_ip", help="IP address of the master node")
     worker_parser.add_argument("master_port", type=int, help="Port of the master node")
+    worker_parser.add_argument(
+        "--port", type=int, default=8001, help="Port for worker node (default: 8001)"
+    )
 
     return parser
 
