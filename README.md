@@ -358,6 +358,13 @@ curl -X POST http://localhost:8000/job/cancel/{job_id}
 - **Memory Management**: Intermediate data is streamed to prevent memory overflow
 - **Network Optimization**: Efficient serialization and compression
 
+### 9.4 Benefits of NFS Approach
+- **No Network Transfers**: Workers access data directly from shared storage
+- **Consistent Paths**: All nodes see identical directory structure
+- **Fault Tolerance**: Data persists even if individual nodes fail
+- **Simplified Coordination**: Master doesn't need to collect files over HTTP
+- **Scalable**: Easy to add more workers without data distribution complexity
+
 ## 10. Extending the System
 
 ### 10.1. Adding New MapReduce Jobs

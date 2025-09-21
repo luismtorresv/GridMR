@@ -33,6 +33,10 @@ from mapreduce.types import MapTask, ReduceTask, TaskResult, TaskStatus, TaskTyp
 def handle_master(args: argparse.Namespace) -> None:
     import uvicorn
 
+    # Configure NFS settings for the master instance
+    if hasattr(args, "use_nfs") and args.use_nfs:
+        master_instance.configure_nfs(args.nfs_server_path)
+
     config = uvicorn.Config(app=app, host="0.0.0.0", port=args.port, log_level="info")
     server = uvicorn.Server(config)
     asyncio.run(server.serve())
@@ -83,38 +87,85 @@ class Master:
     def __init__(self):
         self.jobs: Dict[str, JobTracker] = {}
         self.workers: Dict[str, WorkerInfo] = {}
+        self.use_nfs = False
+        self.nfs_server_path = "/shared/gridmr"
+        self.nfs_input_path = None
+        self.nfs_jobs_path = None
 
-    # This was made with GPT, it resolves the URL so it can find the folder while no using an abs path.
+    def configure_nfs(self, nfs_server_path: str):
+        """Configure NFS paths for distributed storage"""
+        self.use_nfs = True
+        self.nfs_server_path = nfs_server_path
+        self.nfs_input_path = Path(nfs_server_path) / "input"
+        self.nfs_jobs_path = Path(nfs_server_path) / "jobs"
+
+        # Ensure NFS directories exist on the server
+        self.nfs_input_path.mkdir(parents=True, exist_ok=True)
+        self.nfs_jobs_path.mkdir(parents=True, exist_ok=True)
+
+        print(f"✅ NFS configured - Server path: {self.nfs_server_path}")
+        print(f"   Input path: {self.nfs_input_path}")
+        print(f"   Jobs path: {self.nfs_jobs_path}")
+
     def resolve_path(self, data_url):
+        """Resolve path with NFS support"""
         file_url = urlparse(str(data_url))
         host = file_url.netloc or "localhost"
         raw_path = file_url.path
 
         if host in ("localhost", "127.0.0.1"):
-            # Handle absolute paths correctly
-            if raw_path.startswith("/"):
-                # This is already an absolute path
-                return Path(raw_path)
+            if self.use_nfs:
+                # For NFS mode, convert local paths to NFS server paths
+                if raw_path.startswith("/"):
+                    # Check if it's already pointing to NFS input directory
+                    if str(self.nfs_input_path) in raw_path:
+                        return Path(raw_path)
+                    else:
+                        # Map to NFS input directory
+                        # Extract just the directory name from the path
+                        dir_name = Path(raw_path).name
+                        nfs_input_dir = self.nfs_input_path / dir_name
+                        if nfs_input_dir.exists():
+                            return nfs_input_dir
+                        else:
+                            # Fall back to original path resolution
+                            return Path(raw_path)
+                else:
+                    # Relative path - resolve against NFS input directory
+                    return self.nfs_input_path / raw_path
             else:
-                # This is a relative path, resolve against current working dir
-                return Path(raw_path).resolve()
+                # Original local mode
+                if raw_path.startswith("/"):
+                    return Path(raw_path)
+                else:
+                    return Path(raw_path).resolve()
         else:
             raise ValueError(f"Remote host {host} not supported yet")
 
     def create_job(self, data_url: str, code_url: str, job_name: str = None) -> str:
         # Generate shorter, cleaner job ID (8 characters instead of full UUID)
-        job_id = str(uuid.uuid4()).split("-")[0]  # Use first part of UUID
+        job_id = str(uuid.uuid4()).split("-")[0]
 
         # Resolve input files
         input_dir = self.resolve_path(data_url)
         input_files = [str(f) for f in input_dir.iterdir() if f.is_file()]
 
-        # Create cleaner output directory structure: output/{job_id}
-        base_output_dir = Path.cwd() / "output"
-        output_dir = str(base_output_dir / job_id)
+        # Create output directory structure based on NFS configuration
+        if self.use_nfs:
+            # NFS mode: jobs/{job_id}
+            output_dir = str(self.nfs_jobs_path / job_id)
+        else:
+            # Local mode: output/{job_id}
+            base_output_dir = Path.cwd() / "output"
+            output_dir = str(base_output_dir / job_id)
 
         job_tracker = JobTracker(job_id, input_files, output_dir, code_url)
         self.jobs[job_id] = job_tracker
+
+        print(f"🚀 Created job {job_id}")
+        print(f"   Input files: {len(input_files)} files from {input_dir}")
+        print(f"   Output directory: {output_dir}")
+        print(f"   Storage mode: {'NFS' if self.use_nfs else 'Local'}")
 
         return job_id
 

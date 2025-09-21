@@ -33,6 +33,16 @@ def build_parser() -> argparse.ArgumentParser:
     client_parser.add_argument("ip_address", help="IP address of the master node")
     client_parser.add_argument("data_url", help="URL to the input data")
     client_parser.add_argument("code_url", help="URL to the MapReduce code")
+    client_parser.add_argument(
+        "--nfs-mount",
+        default="/mnt/gridmr",
+        help="NFS mount point path (default: /mnt/gridmr)",
+    )
+    client_parser.add_argument(
+        "--use-nfs",
+        action="store_true",
+        help="Use NFS shared storage instead of local paths",
+    )
 
     # Master
     master_parser = subparsers.add_parser(
@@ -40,6 +50,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     master_parser.add_argument(
         "--port", type=int, default=8000, help="Port for master node (default: 8000)"
+    )
+    master_parser.add_argument(
+        "--nfs-server-path",
+        default="/shared/gridmr",
+        help="NFS server export path (default: /shared/gridmr)",
+    )
+    master_parser.add_argument(
+        "--use-nfs", action="store_true", help="Use NFS shared storage for job data"
     )
 
     # Worker
@@ -50,6 +68,14 @@ def build_parser() -> argparse.ArgumentParser:
     worker_parser.add_argument("master_port", type=int, help="Port of the master node")
     worker_parser.add_argument(
         "--port", type=int, default=8001, help="Port for worker node (default: 8001)"
+    )
+    worker_parser.add_argument(
+        "--nfs-mount",
+        default="/mnt/gridmr",
+        help="NFS mount point path (default: /mnt/gridmr)",
+    )
+    worker_parser.add_argument(
+        "--use-nfs", action="store_true", help="Use NFS shared storage for task data"
     )
 
     return parser

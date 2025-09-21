@@ -8,6 +8,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import uvicorn
 import requests
+from pathlib import Path
 
 from mapreduce import TaskTracker, Mapper, Reducer
 from mapreduce.types import MapTask, ReduceTask, TaskResult, TaskStatus
@@ -42,13 +43,33 @@ class HeartbeatRequest(BaseModel):
 
 
 class Worker:
-    def __init__(self, worker_id: str, master_url: str, port: int):
+    def __init__(
+        self,
+        worker_id: str,
+        master_url: str,
+        port: int,
+        nfs_mount: str = None,
+        use_nfs: bool = False,
+    ):
         self.worker_id = worker_id
         self.master_url = master_url
         self.port = port
         self.task_tracker = TaskTracker(worker_id)
         self.current_tasks: Dict[str, TaskResult] = {}
         self.app = FastAPI(title=f"MapReduce Worker {worker_id}")
+
+        # NFS configuration
+        self.use_nfs = use_nfs
+        self.nfs_mount = nfs_mount or "/mnt/gridmr"
+
+        if self.use_nfs:
+            self.nfs_input_path = Path(self.nfs_mount) / "input"
+            self.nfs_jobs_path = Path(self.nfs_mount) / "jobs"
+            print(f"✅ Worker {worker_id} configured for NFS")
+            print(f"   Mount point: {self.nfs_mount}")
+            print(f"   Input path: {self.nfs_input_path}")
+            print(f"   Jobs path: {self.nfs_jobs_path}")
+
         self.setup_routes()
 
     def setup_routes(self):
@@ -241,7 +262,13 @@ def handle_worker(args: argparse.Namespace):
     worker_id = f"worker_{uuid.uuid4().hex[:8]}"
     master_url = f"http://{args.master_ip}:{args.master_port}"
 
-    worker = Worker(worker_id=worker_id, master_url=master_url, port=args.port)
+    worker = Worker(
+        worker_id=worker_id,
+        master_url=master_url,
+        port=args.port,
+        nfs_mount=args.nfs_mount,
+        use_nfs=args.use_nfs,
+    )
 
     # Run the worker
     asyncio.run(worker.start())

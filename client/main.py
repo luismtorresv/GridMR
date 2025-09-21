@@ -11,12 +11,16 @@ from urllib.parse import urlunparse
 
 
 class Client:
-    def __init__(self, master_ip_address: str):
+    def __init__(
+        self, master_ip_address: str, nfs_mount: str = None, use_nfs: bool = False
+    ):
         # Ensure the URL has the correct format
         if not master_ip_address.startswith("http"):
             master_ip_address = f"http://{master_ip_address}:8000"
 
         self.base_url = master_ip_address
+        self.nfs_mount = nfs_mount
+        self.use_nfs = use_nfs
 
     def _make_file_url(self, path: str) -> str:
         """Convert a relative or absolute path to a proper file:// URL"""
@@ -185,11 +189,15 @@ class Client:
 
 
 def handle_client(args: argparse.Namespace):
-    client = Client(args.ip_address)
+    client = Client(args.ip_address, nfs_mount=args.nfs_mount, use_nfs=args.use_nfs)
 
     print(f"Submitting job to master at {args.ip_address}")
     print(f"Data URL: {args.data_url}")
     print(f"Code URL: {args.code_url}")
+    print(f"Storage mode: {'NFS' if args.use_nfs else 'Local'}")
+
+    if args.use_nfs:
+        print(f"NFS mount point: {args.nfs_mount}")
 
     response = client.submit(args.code_url, args.data_url)
 
