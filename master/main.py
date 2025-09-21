@@ -87,11 +87,16 @@ class Master:
     def resolve_path(self, data_url):
         file_url = urlparse(str(data_url))
         host = file_url.netloc or "localhost"
-        raw_path = file_url.path.lstrip("/")  # prevent leading slash confusion
+        raw_path = file_url.path
 
         if host in ("localhost", "127.0.0.1"):
-            # Resolve against current working dir
-            return Path(raw_path).resolve()
+            # Handle absolute paths correctly
+            if raw_path.startswith("/"):
+                # This is already an absolute path
+                return Path(raw_path)
+            else:
+                # This is a relative path, resolve against current working dir
+                return Path(raw_path).resolve()
         else:
             raise ValueError(f"Remote host {host} not supported yet")
 
