@@ -61,6 +61,99 @@ class OutputCollector:
         self.buffer.clear()
 
 
+class ShuffleSorter:
+    """
+    Handles the Shuffle and Sort phase between Map and Reduce phases.
+    According to Google's MapReduce specification, this phase:
+    1. Groups intermediate key-value pairs by key
+    2. Sorts them by key
+    3. Prepares input for reducers in format (k2, list(v2))
+    """
+
+    def __init__(self, use_nfs: bool = False, nfs_mount: str = "/mnt/gridmr"):
+        self.use_nfs = use_nfs
+        self.nfs_mount = nfs_mount
+
+    def shuffle_and_sort(
+        self, intermediate_files: List[str], partition_id: int, output_file: str
+    ) -> str:
+        """
+        Perform shuffle and sort for a specific partition.
+
+        Args:
+            intermediate_files: List of intermediate files from map tasks for this partition
+            partition_id: The partition ID being processed
+            output_file: Where to write the shuffled and sorted output
+
+        Returns:
+            Path to the shuffled and sorted file ready for reducer input
+        """
+        print(f"🔀 Starting shuffle and sort for partition {partition_id}")
+
+        # CRITICAL NFS FIX: Map server paths to worker mount paths if needed
+        if self.use_nfs:
+            mapped_files = [
+                f.replace("/shared/gridmr", self.nfs_mount) for f in intermediate_files
+            ]
+            mapped_output = output_file.replace("/shared/gridmr", self.nfs_mount)
+        else:
+            mapped_files = intermediate_files
+            mapped_output = output_file
+
+        # Phase 1: Collect all key-value pairs from intermediate files
+        all_kvs: List[KeyValue] = []
+
+        print(
+            f"📖 Reading {len(mapped_files)} intermediate files for partition {partition_id}"
+        )
+
+        for input_file in mapped_files:
+            if os.path.exists(input_file):
+                print(f"   Processing intermediate file: {input_file}")
+                with open(input_file, "r") as f:
+                    line_count = 0
+                    for line in f:
+                        parts = line.strip().split("\t", 1)
+                        if len(parts) == 2:
+                            key, value = parts
+                            all_kvs.append(KeyValue(key=key, value=value))
+                            line_count += 1
+                    print(f"     Read {line_count} key-value pairs")
+            else:
+                print(f"⚠️  Intermediate file not found: {input_file}")
+
+        # Phase 2: Sort all key-value pairs by key (SORT step)
+        print(f"🔧 Sorting {len(all_kvs)} key-value pairs by key")
+        all_kvs.sort(key=lambda kv: str(kv.key))
+
+        # Phase 3: Group by key (SHUFFLE step)
+        # This creates the format (k2, list(v2)) that reducers expect
+        key_groups: Dict[str, List[Any]] = {}
+        for kv in all_kvs:
+            if kv.key not in key_groups:
+                key_groups[kv.key] = []
+            key_groups[kv.key].append(kv.value)
+
+        print(f"🔑 Grouped into {len(key_groups)} unique keys")
+
+        # Phase 4: Write shuffled and sorted output in the format expected by reducers
+        # Format: key\tvalue1,value2,value3... (comma-separated values for same key)
+        os.makedirs(os.path.dirname(mapped_output), exist_ok=True)
+
+        with open(mapped_output, "w") as out_f:
+            for key in sorted(key_groups.keys()):  # Ensure keys are sorted
+                values = key_groups[key]
+                # Write as: key\tvalue1,value2,value3...
+                values_str = ",".join(str(v) for v in values)
+                out_f.write(f"{key}\t{values_str}\n")
+
+        print(f"✅ Shuffle and sort completed for partition {partition_id}")
+        print(f"   Output file: {mapped_output}")
+
+        # Return the appropriate path (server path for NFS, local path otherwise)
+        return output_file if self.use_nfs else mapped_output
+
+
 class TaskTracker:
     """Manages execution of individual map and reduce tasks on worker nodes"""
 
@@ -71,6 +164,7 @@ class TaskTracker:
         self.use_nfs = use_nfs
         self.nfs_mount = nfs_mount
         self.current_tasks: Dict[str, TaskResult] = {}
+        self.shuffle_sorter = ShuffleSorter(use_nfs, nfs_mount)
 
     def execute_map_task(self, task: MapTask, mapper_class: type) -> TaskResult:
         """Execute a map task using the provided mapper"""
@@ -182,7 +276,12 @@ class TaskTracker:
         return result
 
     def execute_reduce_task(self, task: ReduceTask, reducer_class: type) -> TaskResult:
-        """Execute a reduce task using the provided reducer"""
+        """
+        Execute a reduce task using the provided reducer.
+
+        IMPORTANT: This now expects the input files to already be shuffled and sorted
+        by the ShuffleSorter in the correct format (k2, list(v2)) as per Google's specification.
+        """
         start_time = time.time()
         result = TaskResult(
             task_id=task.task_id,
@@ -213,38 +312,42 @@ class TaskTracker:
                 input_files = task.input_files
                 output_file = task.output_file
 
-            # Read and merge all input files for this partition
-            key_values: Dict[str, List[Any]] = {}
-
-            print(
-                f"📖 Reading {len(input_files)} intermediate files for reduce task {task.task_id}"
+            # STEP 1: Perform shuffle and sort on intermediate files
+            # This creates the proper input format for the reducer: (k2, list(v2))
+            shuffle_output_dir = os.path.join(os.path.dirname(output_file), "shuffled")
+            shuffle_output_file = os.path.join(
+                shuffle_output_dir, f"shuffled_part_{task.partition_id}.txt"
             )
 
-            for input_file in input_files:
-                if os.path.exists(input_file):
-                    print(f"   Processing intermediate file: {input_file}")
-                    with open(input_file, "r") as f:
-                        line_count = 0
-                        for line in f:
-                            parts = line.strip().split("\t", 1)
-                            if len(parts) == 2:
-                                key, value = parts
-                                if key not in key_values:
-                                    key_values[key] = []
-                                key_values[key].append(value)
-                                line_count += 1
-                        print(f"     Read {line_count} key-value pairs")
-                else:
-                    print(f"⚠️  Intermediate file not found: {input_file}")
+            print(f"🔀 Performing shuffle and sort for reduce task {task.task_id}")
+            shuffled_file = self.shuffle_sorter.shuffle_and_sort(
+                input_files, task.partition_id, shuffle_output_file
+            )
 
-            print(f"🔑 Reducing {len(key_values)} unique keys")
+            # STEP 2: Execute reduce function on shuffled data
+            # Now the input is in the correct format: each line is "key\tvalue1,value2,value3..."
+            print(f"🔧 Executing reducer on shuffled data from: {shuffled_file}")
 
-            # Execute reduce for each key
+            # Map to local path if using NFS
+            local_shuffled_file = (
+                shuffled_file.replace("/shared/gridmr", self.nfs_mount)
+                if self.use_nfs
+                else shuffled_file
+            )
+
             os.makedirs(os.path.dirname(output_file), exist_ok=True)
             with open(output_file, "w") as out_f:
-                for key, values in key_values.items():
-                    for output_kv in reducer.reduce(key, iter(values)):
-                        out_f.write(f"{output_kv.key}\t{output_kv.value}\n")
+                with open(local_shuffled_file, "r") as shuffled_f:
+                    for line in shuffled_f:
+                        parts = line.strip().split("\t", 1)
+                        if len(parts) == 2:
+                            key, values_str = parts
+                            # Parse comma-separated values back to list
+                            values = values_str.split(",") if values_str else []
+
+                            # Call reducer with (k2, list(v2)) format - EXACTLY per Google spec!
+                            for output_kv in reducer.reduce(key, iter(values)):
+                                out_f.write(f"{output_kv.key}\t{output_kv.value}\n")
 
             # Return server path for master coordination
             if self.use_nfs:
@@ -259,7 +362,6 @@ class TaskTracker:
             result.execution_time = time.time() - start_time
 
             print(f"✅ Reduce task {task.task_id} completed successfully")
-            print(f"   Processed {len(key_values)} unique keys")
             print(f"   Output file: {result.output_files[0]}")
 
         except Exception as e:
@@ -294,7 +396,7 @@ class MapReduceJob:
         self.completed_map_tasks: List[TaskResult] = []
         self.completed_reduce_tasks: List[TaskResult] = []
 
-    def create_map_tasks(self, num_splits: int = None) -> List[MapTask]:
+    def create_map_tasks(self, num_splits: int | None = None) -> List[MapTask]:
         """Create map tasks by splitting input files"""
         if num_splits is None:
             num_splits = len(self.input_files)
