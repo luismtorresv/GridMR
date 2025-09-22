@@ -204,7 +204,7 @@ class TaskTracker:
                     for f in task.input_files
                 ]
                 output_file = task.output_file.replace("/shared/gridmr", self.nfs_mount)
-                print(f"🔧 NFS path mapping for reduce task:")
+                print("🔧 NFS path mapping for reduce task:")
                 print(f"   Original input files: {task.input_files}")
                 print(f"   Mapped input files: {input_files}")
                 print(f"   Original output: {task.output_file}")

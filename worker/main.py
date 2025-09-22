@@ -177,9 +177,8 @@ class Worker:
             # that the master can use to contact us back
 
             # Get our external/public IP if we're in AWS
-            import socket
 
-            hostname = socket.getfqdn()
+            # hostname = socket.getfqdn()
 
             # Try to determine our public-facing URL
             if self.use_nfs:

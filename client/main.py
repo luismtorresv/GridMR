@@ -116,11 +116,23 @@ class Client:
                 print(f"\nJob {job_id} completed successfully!")
                 print(f"Results available at: {result_url}")
 
-                # If it's a local file URL, try to display results
+                # Handle both NFS and local file URLs
                 if result_url and result_url.startswith("file://"):
                     from pathlib import Path
 
-                    result_dir = Path(result_url[7:])  # Remove "file://" prefix
+                    result_path_str = result_url[7:]  # Remove "file://" prefix
+
+                    # CRITICAL NFS FIX: Map server paths to client mount paths
+                    if self.use_nfs and result_path_str.startswith("/shared/gridmr"):
+                        # Convert server path to client mount path
+                        result_path_str = result_path_str.replace(
+                            "/shared/gridmr", self.nfs_mount
+                        )
+                        print(
+                            f"🔧 NFS path mapping: {result_url[7:]} -> {result_path_str}"
+                        )
+
+                    result_dir = Path(result_path_str)
 
                     # First try to show the consolidated result.txt file
                     consolidated_file = result_dir.parent / "result.txt"
@@ -176,6 +188,11 @@ class Client:
                                 )
                     else:
                         print(f"Result path not found: {result_dir}")
+                        if self.use_nfs:
+                            print(
+                                f"💡 NFS Tip: Make sure {self.nfs_mount} is properly mounted"
+                            )
+                            print(f"   Try: ls -la {self.nfs_mount}/jobs/{job_id}/")
                 else:
                     print(f"Result URL: {result_url}")
 
