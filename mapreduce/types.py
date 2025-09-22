@@ -32,9 +32,15 @@ class MapTask(BaseModel):
     task_id: str
     input_file: str
     output_dir: str
-    mapper_code: str
+    mapper_code: str  # Now expected to be a URL to the mapper program
+    mapper_url: str = ""  # NEW: Explicit URL field for clarity
     split_start: int = 0
     split_end: Optional[int] = None
+
+    def __post_init__(self):
+        # If mapper_url is not set, use mapper_code as URL
+        if not self.mapper_url and self.mapper_code:
+            self.mapper_url = self.mapper_code
 
 
 class ReduceTask(BaseModel):
@@ -43,8 +49,14 @@ class ReduceTask(BaseModel):
     task_id: str
     input_files: List[str]  # Intermediate files from map phase
     output_file: str
-    reducer_code: str
+    reducer_code: str  # Now expected to be a URL to the reducer program
+    reducer_url: str = ""  # NEW: Explicit URL field for clarity
     partition_id: int
+
+    def __post_init__(self):
+        # If reducer_url is not set, use reducer_code as URL
+        if not self.reducer_url and self.reducer_code:
+            self.reducer_url = self.reducer_code
 
 
 class TaskResult(BaseModel):

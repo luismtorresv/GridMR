@@ -10,6 +10,7 @@ import uuid
 import time
 import requests
 import os
+import random
 from enum import Enum
 from typing import Dict, List, Optional
 from fastapi import BackgroundTasks, FastAPI, Request, status, HTTPException
@@ -83,12 +84,44 @@ class JobTracker:
         self.error_message: Optional[str] = None
 
 
+class MapReduceJobWithURLs:
+    """
+    MapReduce job that uses URLs for mapper and reducer programs.
+    This replaces the old job tracker and integrates with the new URL-based system.
+    """
+
+    def __init__(
+        self,
+        job_id: str,
+        job_name: str,
+        input_files: List[str],
+        output_dir: str,
+        mapper_url: str,
+        reducer_url: str,
+    ):
+        self.job_id = job_id
+        self.job_name = job_name
+        self.input_files = input_files
+        self.output_dir = output_dir
+        self.mapper_url = mapper_url
+        self.reducer_url = reducer_url
+        self.status = STATUS.STARTED
+        self.map_tasks: Dict[str, MapTask] = {}
+        self.reduce_tasks: Dict[str, ReduceTask] = {}
+        self.completed_map_tasks: Dict[str, TaskResult] = {}
+        self.completed_reduce_tasks: Dict[str, TaskResult] = {}
+        self.assigned_tasks: Dict[str, str] = {}  # task_id -> worker_id
+        self.progress = 0.0
+        self.error_message: Optional[str] = None
+
+
 class Master:
     def __init__(self):
         self.jobs: Dict[str, JobTracker] = {}
         self.workers: Dict[str, WorkerInfo] = {}
         self.use_nfs = False
         self.nfs_server_path = "/shared/gridmr"
+        self.output_base_dir = "/tmp/gridmr_output"  # Default output directory
         self.nfs_input_path = None
         self.nfs_jobs_path = None
 
@@ -143,31 +176,106 @@ class Master:
             raise ValueError(f"Remote host {host} not supported yet")
 
     def create_job(self, data_url: str, code_url: str, job_name: str = None) -> str:
-        # Generate shorter, cleaner job ID (8 characters instead of full UUID)
-        job_id = str(uuid.uuid4()).split("-")[0]
+        """
+        Create a new MapReduce job with program URLs.
 
-        # Resolve input files
-        input_dir = self.resolve_path(data_url)
-        input_files = [str(f) for f in input_dir.iterdir() if f.is_file()]
+        Args:
+            data_url: URL to input data (file:// for local, nfs:// for NFS)
+            code_url: URL to program directory or base URL for mapper/reducer
+            job_name: Optional name for the job
+        """
+        job_id = f"{int(time.time())}{random.randint(1000, 9999)}"
+        if job_name is None:
+            job_name = f"mapreduce_job_{job_id}"
 
-        # Create output directory structure based on NFS configuration
+        print(f"🚀 Creating MapReduce job: {job_name} (ID: {job_id})")
+        print(f"   Data URL: {data_url}")
+        print(f"   Code URL: {code_url}")
+
+        # Parse data URL and get input files
+        input_dir, input_files = self._parse_data_url(data_url)
+
+        # Create output directory using new structure
         if self.use_nfs:
-            # NFS mode: jobs/{job_id}
-            output_dir = str(self.nfs_jobs_path / job_id)
+            output_dir = "/shared/gridmr"  # Server-side path
         else:
-            # Local mode: output/{job_id}
-            base_output_dir = Path.cwd() / "output"
-            output_dir = str(base_output_dir / job_id)
+            output_dir = f"{self.output_base_dir}"
 
-        job_tracker = JobTracker(job_id, input_files, output_dir, code_url)
-        self.jobs[job_id] = job_tracker
+        # Parse code URL to get mapper and reducer URLs
+        mapper_url, reducer_url = self._parse_code_url(code_url)
 
-        print(f"🚀 Created job {job_id}")
+        # Create job with URL-based programs
+        job = MapReduceJobWithURLs(
+            job_id=job_id,
+            job_name=job_name,
+            input_files=input_files,
+            output_dir=output_dir,
+            mapper_url=mapper_url,
+            reducer_url=reducer_url,
+        )
+
+        self.jobs[job_id] = job
+
+        print(f"✅ Job {job_name} created successfully")
+        print(f"   Job ID: {job_id}")
         print(f"   Input files: {len(input_files)} files from {input_dir}")
         print(f"   Output directory: {output_dir}")
+        print(f"   Mapper URL: {mapper_url}")
+        print(f"   Reducer URL: {reducer_url}")
         print(f"   Storage mode: {'NFS' if self.use_nfs else 'Local'}")
 
         return job_id
+
+    def _parse_code_url(self, code_url: str) -> tuple:
+        """
+        Parse code URL to determine mapper and reducer URLs.
+
+        Args:
+            code_url: Base URL for programs, or specific program type
+
+        Returns:
+            Tuple of (mapper_url, reducer_url)
+        """
+        # Handle different code URL formats:
+
+        if code_url.lower() == "wordcount":
+            # Built-in wordcount programs
+            if self.use_nfs:
+                base_url = "nfs://shared/gridmr/programs"
+            else:
+                base_url = "file:///home/penguin/uni/gridmr/programs"
+
+            mapper_url = f"{base_url}/wordcount_mapper.py"
+            reducer_url = f"{base_url}/wordcount_reducer.py"
+
+        elif "/" in code_url:
+            # URL to a directory containing mapper and reducer files
+            # Assume standard naming: {program}_mapper.py and {program}_reducer.py
+            if code_url.endswith("/"):
+                code_url = code_url.rstrip("/")
+
+            # Extract program name from URL
+            program_name = "wordcount"  # Default
+            if "programs/" in code_url:
+                parts = code_url.split("programs/")
+                if len(parts) > 1:
+                    program_name = parts[1] or "wordcount"
+
+            mapper_url = f"{code_url}/{program_name}_mapper.py"
+            reducer_url = f"{code_url}/{program_name}_reducer.py"
+
+        else:
+            # Assume it's a program name, use default location
+            program_name = code_url.lower()
+            if self.use_nfs:
+                base_url = "nfs://shared/gridmr/programs"
+            else:
+                base_url = "file:///home/penguin/uni/gridmr/programs"
+
+            mapper_url = f"{base_url}/{program_name}_mapper.py"
+            reducer_url = f"{base_url}/{program_name}_reducer.py"
+
+        return mapper_url, reducer_url
 
     def register_worker(self, worker_id: str, worker_url: str, worker_type: str) -> str:
         if worker_id in self.workers:

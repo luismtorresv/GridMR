@@ -12,6 +12,7 @@ from pathlib import Path
 
 from mapreduce import TaskTracker, Mapper, Reducer
 from mapreduce.types import MapTask, ReduceTask, TaskResult, TaskStatus
+from mapreduce.program_loader import ProgramLoader
 
 # Import example jobs
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -71,6 +72,11 @@ class Worker:
             print(f"   Mount point: {self.nfs_mount}")
             print(f"   Input path: {self.nfs_input_path}")
             print(f"   Jobs path: {self.nfs_jobs_path}")
+
+        # NEW: Add program loader for URL-based program loading
+        self.program_loader = ProgramLoader(
+            self.nfs_mount if use_nfs else "/mnt/gridmr"
+        )
 
         self.setup_routes()
 
@@ -156,19 +162,33 @@ class Worker:
 
     def load_user_class(self, code_content: str, class_type: str):
         """Dynamically load user-defined mapper or reducer class"""
-        # For simplicity, we'll use the code_content as a job type identifier
-        # In a real implementation, this would download and execute code from URL
-        job_type = (
-            code_content.lower()
-            .replace("http://", "")
-            .replace("https://", "")
-            .split("/")[-1]
-        )
+        try:
+            # NEW: Use ProgramLoader to load from URLs
+            # code_content is now expected to be a URL to the program file
+            program_type = "mapper" if class_type == "Mapper" else "reducer"
 
-        if class_type == "Mapper":
-            return MAPPER_REGISTRY.get(job_type, MAPPER_REGISTRY["wordcount"])
-        else:
-            return REDUCER_REGISTRY.get(job_type, REDUCER_REGISTRY["wordcount"])
+            # Load the class from URL using ProgramLoader
+            program_class = self.program_loader.load_program_from_url(
+                code_content, program_type
+            )
+            return program_class
+
+        except Exception as e:
+            print(f"⚠️  Failed to load {class_type} from URL '{code_content}': {e}")
+            print("   Falling back to registry...")
+
+            # FALLBACK: Use the old registry system for backward compatibility
+            job_type = (
+                code_content.lower()
+                .replace("http://", "")
+                .replace("https://", "")
+                .split("/")[-1]
+            )
+
+            if class_type == "Mapper":
+                return MAPPER_REGISTRY.get(job_type, MAPPER_REGISTRY["wordcount"])
+            else:
+                return REDUCER_REGISTRY.get(job_type, REDUCER_REGISTRY["wordcount"])
 
     def register_with_master(self):
         """Register this worker with the master node"""

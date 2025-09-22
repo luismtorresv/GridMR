@@ -3,6 +3,7 @@ import os
 import time
 from typing import Iterator, List, Dict, Any
 from .types import KeyValue, MapTask, ReduceTask, TaskResult, TaskStatus, TaskType
+from .program_loader import ProgramLoader
 
 
 class Mapper(abc.ABC):
@@ -59,6 +60,62 @@ class OutputCollector:
             for kv in self.buffer:
                 f.write(f"{kv.key}\t{kv.value}\n")
         self.buffer.clear()
+
+
+class KeyPartitioner:
+    """
+    Handles key partitioning for MapReduce jobs.
+    Uses hash-based partitioning to distribute keys across reducers.
+    This works for any type of key (strings, numbers, objects, etc.).
+    """
+
+    def __init__(self, num_partitions: int = 4):
+        self.num_partitions = num_partitions
+        # Calculate hash ranges for each partition
+        self.hash_ranges = self._calculate_hash_ranges()
+
+    def _calculate_hash_ranges(self):
+        """
+        Calculate hash ranges for each partition.
+        Python's hash() function returns values in a large range,
+        so we divide that range into equal partitions.
+        """
+
+        # Python hash range is typically -sys.maxsize-1 to sys.maxsize
+        # But we'll use a simpler approach: hash % num_partitions
+        # This gives us ranges [0, 1, 2, ..., num_partitions-1]
+        ranges = []
+        for i in range(self.num_partitions):
+            ranges.append(i)
+        return ranges
+
+    def get_partition(self, key: Any) -> int:
+        """
+        Get the partition ID for a given key based on its hash.
+
+        Args:
+            key: The key to partition (can be any hashable type)
+
+        Returns:
+            Partition ID (0 to num_partitions-1)
+        """
+        try:
+            # Use Python's built-in hash function and modulo for even distribution
+            key_hash = hash(str(key))  # Convert to string first to ensure hashability
+            partition = key_hash % self.num_partitions
+            return partition
+        except Exception as e:
+            print(f"⚠️  Error hashing key '{key}': {e}")
+            # Fallback to partition 0 for unhashable keys
+            return 0
+
+    def get_range_description(self, partition_id: int) -> str:
+        """Get human-readable description of partition"""
+        if 0 <= partition_id < self.num_partitions:
+            total_range = self.num_partitions
+            percentage = 100 / total_range
+            return f"Hash%{self.num_partitions}={partition_id} (~{percentage:.1f}% of keys)"
+        return "UNKNOWN"
 
 
 class ShuffleSorter:
@@ -165,6 +222,10 @@ class TaskTracker:
         self.nfs_mount = nfs_mount
         self.current_tasks: Dict[str, TaskResult] = {}
         self.shuffle_sorter = ShuffleSorter(use_nfs, nfs_mount)
+        # Use hash-based partitioning instead of range-based
+        self.partitioner = KeyPartitioner(num_partitions=4)
+        # NEW: Add program loader for URL-based program loading
+        self.program_loader = ProgramLoader(nfs_mount)
 
     def execute_map_task(self, task: MapTask, mapper_class: type) -> TaskResult:
         """Execute a map task using the provided mapper"""
@@ -195,12 +256,16 @@ class TaskTracker:
                 input_file = task.input_file
                 output_dir = task.output_dir
 
-            # Set up output collector
-            intermediate_dir = os.path.join(output_dir, "intermediate")
-            os.makedirs(intermediate_dir, exist_ok=True)
+            # NEW DIRECTORY STRUCTURE: jobs/{job_id}/intermediate/map/
+            # Extract job_id from task_id (format: {job_id}_map_{i})
+            job_id = "_".join(task.task_id.split("_")[:-2])  # Remove "_map_{i}"
+            intermediate_map_dir = os.path.join(
+                output_dir, "jobs", job_id, "intermediate", "map"
+            )
+            os.makedirs(intermediate_map_dir, exist_ok=True)
 
             print(f"📁 Reading input file: {input_file}")
-            print(f"📁 Output directory: {intermediate_dir}")
+            print(f"📁 Map output directory: {intermediate_map_dir}")
 
             # Read input file and process
             with open(input_file, "r") as f:
@@ -213,18 +278,21 @@ class TaskTracker:
 
                 print(f"📊 Processing {len(lines)} lines from {input_file}")
 
-                # SHUFFLE STEP: Group output by partition (hash of key)
-                # Use consistent number of reducers for proper key distribution
-                num_reducers = 4  # Standard number of reduce partitions
+                # HASH-BASED PARTITIONING: Use hash-based partitioning instead of range
+                num_reducers = self.partitioner.num_partitions
                 partitions: Dict[int, List[KeyValue]] = {}
+
+                # Show partition ranges for debugging
+                print("🔍 Partition ranges:")
+                for i in range(num_reducers):
+                    range_desc = self.partitioner.get_range_description(i)
+                    print(f"   Partition {i}: {range_desc}")
 
                 for line_num, line in enumerate(lines, start):
                     # Call mapper to get key-value pairs
                     for kv in mapper.map(line_num, line.strip()):
-                        # CRITICAL: Partition based on key hash (shuffle step)
-                        # This ensures same keys go to same reducer
-                        key_hash = hash(str(kv.key))
-                        partition = key_hash % num_reducers
+                        # FIXED: Use hash-based partitioning instead of range
+                        partition = self.partitioner.get_partition(str(kv.key))
 
                         if partition not in partitions:
                             partitions[partition] = []
@@ -237,12 +305,19 @@ class TaskTracker:
                     kvs.sort(key=lambda x: str(x.key))
 
                     output_file = os.path.join(
-                        intermediate_dir, f"map_{task.task_id}_part_{partition_id}.txt"
+                        intermediate_map_dir,
+                        f"map_{task.task_id}_part_{partition_id}.txt",
                     )
 
+                    range_desc = self.partitioner.get_range_description(partition_id)
                     print(
-                        f"💾 Writing partition {partition_id}: {len(kvs)} key-value pairs to {output_file}"
+                        f"💾 Writing partition {partition_id} ({range_desc}): {len(kvs)} key-value pairs to {output_file}"
                     )
+
+                    # Show sample keys for debugging
+                    if kvs:
+                        sample_keys = [str(kv.key) for kv in kvs[:5]]  # First 5 keys
+                        print(f"     Sample keys: {sample_keys}")
 
                     with open(output_file, "w") as out_f:
                         for kv in kvs:
@@ -312,14 +387,33 @@ class TaskTracker:
                 input_files = task.input_files
                 output_file = task.output_file
 
-            # STEP 1: Perform shuffle and sort on intermediate files
-            # This creates the proper input format for the reducer: (k2, list(v2))
-            shuffle_output_dir = os.path.join(os.path.dirname(output_file), "shuffled")
+            # NEW DIRECTORY STRUCTURE: jobs/{job_id}/intermediate/shuffled/
+            # Extract job_id from task_id (format: {job_id}_reduce_{partition_id})
+            job_id = "_".join(
+                task.task_id.split("_")[:-2]
+            )  # Remove "_reduce_{partition_id}"
+            base_dir = os.path.dirname(
+                os.path.dirname(output_file)
+            )  # Get base directory
+            shuffle_output_dir = os.path.join(
+                base_dir, "jobs", job_id, "intermediate", "shuffled"
+            )
             shuffle_output_file = os.path.join(
                 shuffle_output_dir, f"shuffled_part_{task.partition_id}.txt"
             )
 
+            # Also update the reduce output to use the new structure
+            reduce_output_dir = os.path.join(
+                base_dir, "jobs", job_id, "intermediate", "reduce"
+            )
+            final_output_file = os.path.join(
+                reduce_output_dir, f"part-{task.partition_id:05d}.txt"
+            )
+
             print(f"🔀 Performing shuffle and sort for reduce task {task.task_id}")
+            print(f"   Shuffle output: {shuffle_output_file}")
+            print(f"   Final output: {final_output_file}")
+
             shuffled_file = self.shuffle_sorter.shuffle_and_sort(
                 input_files, task.partition_id, shuffle_output_file
             )
@@ -335,8 +429,9 @@ class TaskTracker:
                 else shuffled_file
             )
 
-            os.makedirs(os.path.dirname(output_file), exist_ok=True)
-            with open(output_file, "w") as out_f:
+            # Use the new final output file location
+            os.makedirs(os.path.dirname(final_output_file), exist_ok=True)
+            with open(final_output_file, "w") as out_f:
                 with open(local_shuffled_file, "r") as shuffled_f:
                     for line in shuffled_f:
                         parts = line.strip().split("\t", 1)
@@ -351,12 +446,12 @@ class TaskTracker:
 
             # Return server path for master coordination
             if self.use_nfs:
-                server_output_file = output_file.replace(
+                server_output_file = final_output_file.replace(
                     self.nfs_mount, "/shared/gridmr"
                 )
                 result.output_files = [server_output_file]
             else:
-                result.output_files = [output_file]
+                result.output_files = [final_output_file]
 
             result.status = TaskStatus.COMPLETED
             result.execution_time = time.time() - start_time
@@ -371,6 +466,48 @@ class TaskTracker:
             result.execution_time = time.time() - start_time
 
         return result
+
+    def execute_map_task_from_url(self, task: MapTask, mapper_url: str) -> TaskResult:
+        """Execute a map task by loading mapper from URL"""
+        try:
+            # Load mapper class from URL
+            mapper_class = self.program_loader.load_program_from_url(
+                mapper_url, "mapper"
+            )
+            # Execute using the loaded class
+            return self.execute_map_task(task, mapper_class)
+        except Exception as e:
+            print(f"❌ Failed to load mapper from URL {mapper_url}: {e}")
+            return TaskResult(
+                task_id=task.task_id,
+                task_type=TaskType.MAP,
+                status=TaskStatus.FAILED,
+                output_files=[],
+                worker_id=self.worker_id,
+                error_message=f"Failed to load mapper: {e}",
+            )
+
+    def execute_reduce_task_from_url(
+        self, task: ReduceTask, reducer_url: str
+    ) -> TaskResult:
+        """Execute a reduce task by loading reducer from URL"""
+        try:
+            # Load reducer class from URL
+            reducer_class = self.program_loader.load_program_from_url(
+                reducer_url, "reducer"
+            )
+            # Execute using the loaded class
+            return self.execute_reduce_task(task, reducer_class)
+        except Exception as e:
+            print(f"❌ Failed to load reducer from URL {reducer_url}: {e}")
+            return TaskResult(
+                task_id=task.task_id,
+                task_type=TaskType.REDUCE,
+                status=TaskStatus.FAILED,
+                output_files=[],
+                worker_id=self.worker_id,
+                error_message=f"Failed to load reducer: {e}",
+            )
 
 
 class MapReduceJob:
@@ -404,10 +541,11 @@ class MapReduceJob:
         tasks = []
         for i, input_file in enumerate(self.input_files):
             task_id = f"{self.job_id}_map_{i}"
+            # Use the base output directory - the TaskTracker will create the proper job structure
             task = MapTask(
                 task_id=task_id,
                 input_file=input_file,
-                output_dir=os.path.join(self.output_dir, "map_output"),
+                output_dir=self.output_dir,  # TaskTracker will add jobs/{job_id}/intermediate/map/
                 mapper_code="",  # Would contain serialized mapper code for remote execution
             )
             tasks.append(task)
@@ -438,8 +576,9 @@ class MapReduceJob:
         # Create reduce task for each partition
         for partition_id, files in partitions.items():
             task_id = f"{self.job_id}_reduce_{partition_id}"
+            # Placeholder output file - TaskTracker will use the new structure
             output_file = os.path.join(
-                self.output_dir, "reduce_output", f"part-{partition_id:05d}.txt"
+                self.output_dir, "placeholder", f"part-{partition_id:05d}.txt"
             )
             task = ReduceTask(
                 task_id=task_id,
@@ -452,3 +591,41 @@ class MapReduceJob:
 
         self.reduce_tasks = tasks
         return tasks
+
+    def create_final_result(self) -> str:
+        """
+        Combine all reduce outputs into a single result file.
+        Creates: jobs/{job_id}/result.txt
+        """
+        result_file = os.path.join(self.output_dir, "jobs", self.job_id, "result.txt")
+        os.makedirs(os.path.dirname(result_file), exist_ok=True)
+
+        print(f"🔗 Combining reduce outputs into final result: {result_file}")
+
+        # Collect all reduce output files and sort by partition
+        reduce_files = []
+        for reduce_result in self.completed_reduce_tasks:
+            if reduce_result.output_files:
+                reduce_files.extend(reduce_result.output_files)
+
+        # Sort files by partition number for consistent output
+        def extract_partition_id(filepath):
+            filename = os.path.basename(filepath)
+            if "part-" in filename:
+                return int(filename.split("part-")[1].split(".")[0])
+            return 0
+
+        reduce_files.sort(key=extract_partition_id)
+
+        # Combine all reduce outputs into single result file
+        with open(result_file, "w") as result_f:
+            for reduce_file in reduce_files:
+                if os.path.exists(reduce_file):
+                    print(f"   Adding content from: {reduce_file}")
+                    with open(reduce_file, "r") as rf:
+                        result_f.write(rf.read())
+                else:
+                    print(f"⚠️  Reduce output file not found: {reduce_file}")
+
+        print(f"✅ Final result created: {result_file}")
+        return result_file
