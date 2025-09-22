@@ -171,23 +171,60 @@ class Worker:
     def register_with_master(self):
         """Register this worker with the master node"""
         try:
+            # For AWS deployment, we need to send the correct worker URL
+            # that the master can use to contact us back
+
+            # Get our external/public IP if we're in AWS
+            import socket
+
+            hostname = socket.getfqdn()
+
+            # Try to determine our public-facing URL
+            if self.use_nfs:
+                # In NFS mode, workers should be reachable by their public IPs
+                # The worker should advertise its public IP, not localhost
+                worker_url = (
+                    f"http://0.0.0.0:{self.port}"  # This won't work for callback
+                )
+
+                # Better approach: let the master determine our IP from the request
+                # But we need to tell it our port
+                headers = {
+                    "X-Worker-Port": str(self.port),
+                    "X-Worker-ID": self.worker_id,
+                }
+            else:
+                worker_url = f"http://localhost:{self.port}"
+                headers = {"X-Worker-URL": worker_url, "X-Worker-ID": self.worker_id}
+
+            print(f"🔗 Registering worker {self.worker_id}")
+            print(f"   Master URL: {self.master_url}")
+            print(f"   Worker advertised URL: {worker_url}")
+            print(f"   Headers: {headers}")
+
             response = requests.post(
                 f"{self.master_url}/worker/register",
                 json={
-                    "worker_id": self.worker_id,
-                    "worker_url": f"http://localhost:{self.port}",
                     "worker_type": "compute",
-                    "capabilities": ["map", "reduce"],
                 },
+                headers=headers,
+                timeout=10,
             )
+
             if response.status_code == 200:
-                print(f"Worker {self.worker_id} registered successfully")
+                result = response.json()
+                print(f"✅ Worker {self.worker_id} registered successfully")
+                print(
+                    f"   Master assigned URL: {result.get('worker_url', 'Not specified')}"
+                )
                 return True
             else:
-                print(f"Failed to register worker: {response.text}")
+                print(f"❌ Failed to register worker: HTTP {response.status_code}")
+                print(f"   Response: {response.text}")
                 return False
+
         except Exception as e:
-            print(f"Error registering with master: {e}")
+            print(f"💥 Error registering with master: {e}")
             return False
 
     async def send_heartbeat(self):

@@ -194,42 +194,89 @@ class Master:
         current_time = time.time()
         available = []
 
-        for worker in self.workers.values():
-            # Check if worker is available and hasn't timed out (5 minutes)
-            if (
-                worker.status == STATUS.AVAILABLE
-                and current_time - worker.last_heartbeat < 300
-            ):
-                available.append(worker)
+        print("🔍 Checking worker availability...")
+        print(f"   Total registered workers: {len(self.workers)}")
 
+        for worker in self.workers.values():
+            time_since_heartbeat = current_time - worker.last_heartbeat
+            is_available = worker.status == STATUS.AVAILABLE
+            is_not_timed_out = time_since_heartbeat < 300
+
+            print(f"   Worker {worker.worker_id}:")
+            print(f"     URL: {worker.worker_url}")
+            print(f"     Status: {worker.status}")
+            print(f"     Last heartbeat: {time_since_heartbeat:.1f}s ago")
+            print(f"     Available: {is_available}, Not timed out: {is_not_timed_out}")
+
+            # Check if worker is available and hasn't timed out (5 minutes)
+            if is_available and is_not_timed_out:
+                available.append(worker)
+                print("     ✅ Added to available workers")
+            else:
+                print("     ❌ Not available")
+
+        print(f"🎯 Available workers: {len(available)} out of {len(self.workers)}")
         return available
 
     async def assign_task_to_worker(
         self, task: MapTask | ReduceTask, worker: WorkerInfo
     ) -> bool:
         """Assign a task to a specific worker"""
+        print(
+            f"🔄 Attempting to assign task {task.task_id} to worker {worker.worker_id} at {worker.worker_url}"
+        )
+
         try:
             task_data = {
                 "task_type": "MAP" if isinstance(task, MapTask) else "REDUCE",
                 "task_data": task.model_dump(),
             }
 
+            print(
+                f"📤 Sending {task_data['task_type']} task to {worker.worker_url}/task/execute"
+            )
+
             response = requests.post(
                 f"{worker.worker_url}/task/execute", json=task_data, timeout=30
             )
 
+            print(f"📥 Response from {worker.worker_id}: Status {response.status_code}")
+
             if response.status_code == 200:
                 result = response.json()
+                print(f"✅ Task response from {worker.worker_id}: {result}")
+
                 if result["status"] != "FAILED":
                     worker.status = STATUS.BUSY
                     worker.current_tasks.append(task.task_id)
+                    print(
+                        f"🎯 Successfully assigned task {task.task_id} to worker {worker.worker_id}"
+                    )
                     return True
+                else:
+                    print(
+                        f"❌ Worker {worker.worker_id} reported task failure: {result.get('error', 'Unknown error')}"
+                    )
+            else:
+                print(
+                    f"❌ HTTP error from {worker.worker_id}: {response.status_code} - {response.text}"
+                )
 
             return False
 
+        except requests.exceptions.Timeout:
+            print(
+                f"⏰ Timeout connecting to worker {worker.worker_id} at {worker.worker_url}"
+            )
+            return False
+        except requests.exceptions.ConnectionError as e:
+            print(
+                f"🔌 Connection error to worker {worker.worker_id} at {worker.worker_url}: {e}"
+            )
+            return False
         except Exception as e:
             print(
-                f"Error assigning task {task.task_id} to worker {worker.worker_id}: {e}"
+                f"💥 Unexpected error assigning task {task.task_id} to worker {worker.worker_id}: {e}"
             )
             return False
 
@@ -548,12 +595,39 @@ async def register_worker(request: Request, body: RegisterWorkerRequest):
     """
     Register a worker machine.
     """
-    client_host = request.client.host
+    client_host = (
+        getattr(request.client, "host", "unknown") if request.client else "unknown"
+    )
+    client_port = (
+        getattr(request.client, "port", "unknown") if request.client else "unknown"
+    )
+
+    print(f"🔗 Worker registration request from {client_host}:{client_port}")
+    print(f"   Request body: {body}")
+    print(f"   Request headers: {dict(request.headers)}")
+
     # Extract worker info from request headers or generate ID
     worker_id = request.headers.get("X-Worker-ID", f"worker_{uuid.uuid4().hex[:8]}")
-    worker_url = request.headers.get("X-Worker-URL", f"http://{client_host}:8001")
+
+    # CRITICAL FIX for AWS: Use the client's public IP + their advertised port
+    if "X-Worker-Port" in request.headers:
+        # Worker sent their port, construct URL using their public IP
+        worker_port = request.headers.get("X-Worker-Port")
+        worker_url = f"http://{client_host}:{worker_port}"
+        print(f"🌐 AWS mode: Using worker's public IP {client_host}:{worker_port}")
+    else:
+        # Fallback to old method
+        worker_url = request.headers.get("X-Worker-URL", f"http://{client_host}:8001")
+        print(f"🏠 Local mode: Using provided/default URL {worker_url}")
+
+    print("🆔 Registering worker:")
+    print(f"   Worker ID: {worker_id}")
+    print(f"   Worker URL: {worker_url}")
+    print(f"   Worker Type: {body.worker_type}")
 
     response = master_instance.register_worker(worker_id, worker_url, body.worker_type)
+
+    print(f"✅ Registration response: {response}")
 
     return JSONResponse(
         content=RegisterWorkerResponse(
