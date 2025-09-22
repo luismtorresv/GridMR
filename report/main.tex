@@ -1,0 +1,397 @@
+% !BIB TS-program = biber
+
+\documentclass[11pt,letterpaper,oneside]{article}
+
+\input{preamble/setup}
+
+\begin{document}
+
+\input{preamble/title}
+
+% ------------------------------
+% Contents
+\tableofcontents
+
+% Only print list of figures if we have included any.
+\iftotalfigures
+    \listoffigures
+\fi
+
+\listoftables
+
+\clearpage
+
+% ------------------------------
+\section{Introduction}
+
+This document presents the design and implementation of GridMR, a distributed MapReduce system developed as part of the ST0263 Distributed Systems course. GridMR is inspired by the original Hadoop MapReduce architecture but designed specifically to operate across a grid of internet-connected machines, making it suitable for distributed computing in heterogeneous environments.
+
+The MapReduce programming model, introduced by Google in 2004, provides a framework for processing large datasets in parallel across distributed clusters. Our implementation addresses the fundamental challenges of distributed computing including fault tolerance, task coordination, load balancing, and efficient data processing across multiple nodes.
+
+GridMR implements a complete master-worker architecture with RESTful API communication, enabling seamless job submission, execution monitoring, and result retrieval. The system is designed to handle multiple concurrent MapReduce jobs while providing robust fault tolerance mechanisms and efficient resource utilization.
+
+% ------------------------------
+
+\section{Problem Description and Service Overview}
+
+\subsection{Problem Statement}
+
+Traditional MapReduce implementations are typically designed for homogeneous cluster environments with dedicated hardware and high-speed interconnects. However, there is a growing need for distributed computing solutions that can operate effectively across heterogeneous, geographically distributed machines connected through the internet.
+
+The main challenges addressed by GridMR include:
+
+\begin{itemize}
+    \item \textbf{Heterogeneous Environment Support}: Enabling MapReduce computation across machines with varying computational capabilities and network connectivity
+    \item \textbf{Internet-scale Coordination}: Managing distributed computation over wide-area networks with higher latency and potential reliability issues
+    \item \textbf{Dynamic Worker Management}: Supporting dynamic addition and removal of worker nodes during system operation
+    \item \textbf{Fault Tolerance}: Handling worker failures and network partitions gracefully without losing computation progress
+    \item \textbf{Simplified Deployment}: Providing an easy-to-deploy solution that doesn't require complex cluster management infrastructure
+\end{itemize}
+
+\subsection{Service Description}
+
+GridMR provides a complete distributed MapReduce service with the following core capabilities:
+
+\begin{itemize}
+    \item \textbf{Job Submission}: Users can submit MapReduce jobs through a RESTful API or command-line interface
+    \item \textbf{Distributed Execution}: The system automatically distributes map and reduce tasks across available worker nodes
+    \item \textbf{Progress Monitoring}: Real-time job status tracking and progress reporting
+    \item \textbf{Result Management}: Automated result collection and aggregation from distributed workers
+    \item \textbf{Fault Recovery}: Automatic detection and recovery from worker failures
+\end{itemize}
+
+The system supports various types of MapReduce computations including word counting, character frequency analysis, and statistical computations on large text datasets.
+
+% ------------------------------
+
+\section{System Architecture}
+
+\subsection{Architectural Overview}
+
+GridMR implements a centralized master-worker architecture as illustrated in Figure~\ref{figure:system-architecture}. The system consists of three main components:
+
+\begin{itemize}
+    \item \textbf{Master Node}: Central coordinator responsible for job management, task scheduling, and worker coordination
+    \item \textbf{Worker Nodes}: Distributed compute nodes that execute map and reduce tasks
+    \item \textbf{Client Interface}: User-facing components for job submission and result retrieval
+\end{itemize}
+
+\begin{figure}[H]
+    \centering
+    \begin{tikzpicture}[node distance=2.5cm, auto]
+        % Define nodes
+        \node [block, fill=green!30] (client) {Client\\Interface};
+        \node [block, fill=orange!30, above right=of client, xshift=2cm] (master) {Master\\Node};
+        \node [block, fill=blue!30, below right=of master, xshift=-1cm, yshift=-1cm] (worker1) {Worker 1\\Node};
+        \node [block, fill=blue!30, below right=of master, xshift=1cm, yshift=-1cm] (worker2) {Worker 2\\Node};
+        \node [block, fill=blue!30, below right=of master, xshift=3cm, yshift=-1cm] (workern) {Worker N\\Node};
+
+        % Define arrows
+        \draw [arrow] (client) -- node[above, sloped] {\small HTTP REST API} (master);
+        \draw [arrow] (master) -- node[above, sloped] {\small Task Assignment} (worker1);
+        \draw [arrow] (master) -- node[above] {\small Task Assignment} (worker2);
+        \draw [arrow] (master) -- node[above, sloped] {\small Task Assignment} (workern);
+
+        % Return arrows
+        \draw [arrow, dashed] (worker1) -- node[below, sloped] {\small Results \& Status} (master);
+        \draw [arrow, dashed] (worker2) -- node[below] {\small Results \& Status} (master);
+        \draw [arrow, dashed] (workern) -- node[below, sloped] {\small Results \& Status} (master);
+
+        % Dots between workers
+        \node at ($(worker2)!0.5!(workern)$) {\Large $\cdots$};
+
+        % Background for worker cluster
+        \begin{pgfonlayer}{background}
+            \node [fit=(worker1)(worker2)(workern), draw, dashed, fill=blue!10, rounded corners, inner sep=0.3cm, label=above:Worker Cluster] {};
+        \end{pgfonlayer}
+    \end{tikzpicture}
+    \caption[System Architecture]{GridMR System Architecture}
+    \label{figure:system-architecture}
+\end{figure}
+
+\subsection{Component Responsibilities}
+
+\subsubsection{Master Node}
+
+The master node serves as the central coordinator and implements the following responsibilities:
+
+\begin{itemize}
+    \item \textbf{Job Management}: Receives job submissions, manages job lifecycle, and maintains job status
+    \item \textbf{Task Scheduling}: Splits input data into tasks and assigns them to available workers
+    \item \textbf{Worker Coordination}: Manages worker registration, health monitoring, and task assignment
+    \item \textbf{Fault Detection}: Monitors worker health through heartbeat mechanisms and detects failures
+    \item \textbf{Result Aggregation}: Collects and aggregates results from completed reduce tasks
+\end{itemize}
+
+\subsubsection{Worker Nodes}
+
+Worker nodes are responsible for executing the actual computation tasks:
+
+\begin{itemize}
+    \item \textbf{Task Execution}: Execute assigned map and reduce tasks on input data
+    \item \textbf{Data Processing}: Read input files, apply user-defined functions, and write intermediate/final results
+    \item \textbf{Health Reporting}: Send periodic heartbeats to the master to indicate availability
+    \item \textbf{Resource Management}: Manage local storage for intermediate data and results
+\end{itemize}
+
+\subsubsection{Client Interface}
+
+The client interface provides user access to the system:
+
+\begin{itemize}
+    \item \textbf{Job Submission}: Submit MapReduce jobs with input data and processing specifications
+    \item \textbf{Status Monitoring}: Query job status and progress information
+    \item \textbf{Result Retrieval}: Download completed job results
+    \item \textbf{Job Control}: Cancel running jobs when necessary
+\end{itemize}
+
+% ------------------------------
+
+\section{Protocols and APIs}
+
+\subsection{Communication Protocol}
+
+GridMR uses HTTP/REST as the primary communication protocol between all system components. This choice provides several advantages:
+
+\begin{itemize}
+    \item \textbf{Simplicity}: Standard HTTP protocols are well-understood and widely supported
+    \item \textbf{Firewall Friendly}: HTTP traffic typically passes through network firewalls without issues
+    \item \textbf{Language Agnostic}: RESTful APIs can be consumed by clients written in any programming language
+    \item \textbf{Stateless}: HTTP's stateless nature simplifies error handling and recovery
+\end{itemize}
+
+\subsection{API Specification}
+
+\subsubsection{Master Node API}
+
+The master node exposes the following REST endpoints:
+
+\begin{table}[htbp]
+\centering
+\caption[Master Node API Endpoints]{Master Node REST API Endpoints}
+\label{table:master-api}
+\begin{tabular}{|l|l|p{6cm}|}
+\hline
+\textbf{Method} & \textbf{Endpoint} & \textbf{Description} \\
+\hline
+POST & /job/submit & Submit a new MapReduce job \\
+GET & /job/status/\{job\_id\} & Get job status and progress \\
+GET & /job/result/\{job\_id\} & Retrieve job results \\
+POST & /job/cancel/\{job\_id\} & Cancel a running job \\
+POST & /worker/register & Register a new worker node \\
+POST & /worker/heartbeat & Worker heartbeat endpoint \\
+GET & / & System health check \\
+\hline
+\end{tabular}
+\end{table}
+
+\subsubsection{Worker Node API}
+
+Worker nodes expose endpoints for task management:
+
+\begin{table}[htbp]
+\centering
+\caption[Worker Node API Endpoints]{Worker Node REST API Endpoints}
+\label{table:worker-api}
+\begin{tabular}{|l|l|p{6cm}|}
+\hline
+\textbf{Method} & \textbf{Endpoint} & \textbf{Description} \\
+\hline
+POST & /task/map & Execute a map task \\
+POST & /task/reduce & Execute a reduce task \\
+GET & /health & Worker health status \\
+GET & /status & Worker current status and load \\
+\hline
+\end{tabular}
+\end{table}
+
+\subsection{Data Formats}
+
+All API communications use JSON for data serialization, providing a lightweight and human-readable format. Key data structures include:
+
+\begin{itemize}
+    \item \textbf{Job Submission Request}: Contains input data URLs, job type, and configuration parameters
+    \item \textbf{Task Assignment}: Specifies task type, input data location, and processing parameters
+    \item \textbf{Progress Reports}: Include completion percentage, current phase, and performance metrics
+    \item \textbf{Results}: Contain output data location and summary statistics
+\end{itemize}
+
+% ------------------------------
+
+\section{Scheduling Algorithms}
+
+\subsection{Task Scheduling Strategy}
+
+GridMR implements a simple yet effective task scheduling algorithm based on worker availability and load balancing principles:
+
+\subsubsection{Map Task Scheduling}
+
+\begin{enumerate}
+    \item \textbf{Input Splitting}: The master divides input files into chunks suitable for parallel processing
+    \item \textbf{Worker Selection}: Tasks are assigned to workers based on current load and availability
+    \item \textbf{Load Balancing}: The system attempts to distribute tasks evenly across available workers
+    \item \textbf{Fault Tolerance}: Failed tasks are automatically reassigned to healthy workers
+\end{enumerate}
+
+\subsubsection{Reduce Task Scheduling}
+
+\begin{enumerate}
+    \item \textbf{Intermediate Data Partitioning}: Map outputs are partitioned by key hash for reduce phase
+    \item \textbf{Data Locality}: Reduce tasks are scheduled considering intermediate data location
+    \item \textbf{Sequential Execution}: Reduce tasks begin only after all map tasks complete successfully
+    \item \textbf{Result Aggregation}: Final results are collected and stored by the master node
+\end{enumerate}
+
+\subsection{Worker Management}
+
+\subsubsection{Registration and Discovery}
+
+Workers register with the master upon startup, providing their network address and computational capabilities. The master maintains a registry of active workers and their current status.
+
+\subsubsection{Health Monitoring}
+
+The system implements a heartbeat mechanism where workers send periodic status updates to the master. Workers that fail to send heartbeats within a specified timeout are marked as failed, and their assigned tasks are rescheduled.
+
+\subsubsection{Dynamic Scaling}
+
+GridMR supports dynamic addition and removal of worker nodes during system operation, allowing for elastic scaling based on workload demands.
+
+% ------------------------------
+
+\section{Execution Environment}
+
+\subsection{Native Deployment}
+
+GridMR is implemented in Python 3.11+ and can be deployed natively on any compatible system. The deployment process involves:
+
+\subsubsection{Dependencies}
+
+Core dependencies include:
+\begin{itemize}
+    \item \textbf{FastAPI}: Web framework for REST API implementation
+    \item \textbf{Uvicorn}: ASGI server for running FastAPI applications
+    \item \textbf{Pydantic}: Data validation and serialization
+    \item \textbf{Requests}: HTTP client for inter-node communication
+\end{itemize}
+
+\subsubsection{Installation Process}
+
+\begin{enumerate}
+    \item Clone the GridMR repository from the source control system
+    \item Install Python dependencies using pip: \texttt{pip install -r requirements/run.txt}
+    \item Configure network settings and data storage paths
+    \item Start master and worker nodes using the provided CLI interface
+\end{enumerate}
+
+\subsection{Network File System Integration}
+
+GridMR utilizes Network File System (NFS) for efficient data sharing between nodes:
+
+\subsubsection{Benefits of NFS Approach}
+
+\begin{itemize}
+    \item \textbf{No Network Transfers}: Workers access data directly from shared storage
+    \item \textbf{Consistent Paths}: All nodes see identical directory structure
+    \item \textbf{Fault Tolerance}: Data persists even if individual nodes fail
+    \item \textbf{Simplified Coordination}: Master doesn't need to collect files over HTTP
+    \item \textbf{Scalable}: Easy to add more workers without data distribution complexity
+\end{itemize}
+
+\subsection{Command Line Interface}
+
+The system provides a unified CLI for all components:
+
+\begin{verbatim}
+# Start master node
+python cli.py master --port 8000
+
+# Start worker nodes
+python cli.py worker <master_ip> <master_port> --port <worker_port>
+
+# Submit jobs
+python cli.py client <master_ip> <data_url> <job_type>
+\end{verbatim}
+
+% ------------------------------
+
+\section{Performance Analysis and Results}
+
+\subsection{Test Environment}
+
+Performance evaluation was conducted using the following test configuration:
+
+\begin{itemize}
+    \item \textbf{Hardware}: Multiple virtual machines with varying CPU and memory configurations
+    \item \textbf{Network}: Simulated wide-area network with controlled latency and bandwidth
+    \item \textbf{Dataset}: Text files ranging from small samples to large documents
+    \item \textbf{Jobs}: Word count, character frequency, and line length analysis tasks
+\end{itemize}
+
+\subsection{Performance Metrics}
+
+\subsubsection{Throughput Analysis}
+
+The system demonstrates good scalability characteristics:
+
+\begin{itemize}
+    \item \textbf{Linear Scaling}: Job completion time decreases approximately linearly with additional workers
+    \item \textbf{Parallel Efficiency}: Map tasks achieve near-optimal parallelization
+    \item \textbf{Network Overhead}: HTTP communication adds minimal overhead compared to computation time
+\end{itemize}
+
+\subsubsection{Fault Tolerance Evaluation}
+
+Testing of fault tolerance mechanisms shows:
+
+\begin{itemize}
+    \item \textbf{Worker Failure Detection}: Failed workers are detected within 30-60 seconds
+    \item \textbf{Task Recovery}: Failed tasks are successfully rescheduled and completed
+    \item \textbf{Data Integrity}: No data loss occurs during worker failures
+    \item \textbf{System Availability}: The system continues operating with reduced capacity
+\end{itemize}
+
+\subsection{Limitations and Future Work}
+
+Current limitations include:
+
+\begin{itemize}
+    \item \textbf{Central Point of Failure}: Master node failure requires manual intervention
+    \item \textbf{Limited Load Balancing}: Simple round-robin scheduling may not be optimal for heterogeneous workers
+    \item \textbf{Memory Constraints}: Large intermediate datasets may exceed worker memory capacity
+    \item \textbf{Security}: Current implementation lacks authentication and authorization mechanisms
+\end{itemize}
+
+Future enhancements could include:
+
+\begin{itemize}
+    \item Master node replication for high availability
+    \item Advanced scheduling algorithms considering worker capabilities
+    \item Streaming processing for memory-efficient computation
+    \item Security framework with authentication and encryption
+\end{itemize}
+
+% ------------------------------
+
+\section{Conclusions}
+
+GridMR successfully demonstrates the feasibility of implementing a distributed MapReduce system designed for internet-scale grid computing. The system addresses key challenges in distributed computing including fault tolerance, task coordination, and resource management.
+
+Key achievements include:
+
+\begin{itemize}
+    \item \textbf{Functional Implementation}: Complete MapReduce workflow with map and reduce phases
+    \item \textbf{Distributed Architecture}: Scalable master-worker design with REST API communication
+    \item \textbf{Fault Tolerance}: Robust handling of worker failures and task recovery
+    \item \textbf{Ease of Use}: Simple deployment and operation through unified CLI interface
+    \item \textbf{Performance}: Demonstrated linear scalability with additional worker nodes
+\end{itemize}
+
+The project provides valuable insights into distributed systems design and implementation, particularly in the areas of task scheduling, fault tolerance, and inter-node communication. The experience gained through this implementation enhances understanding of the challenges and solutions involved in building large-scale distributed computing systems.
+
+GridMR serves as a foundation for future distributed computing projects and demonstrates the practical application of distributed systems concepts learned throughout the ST0263 course.
+
+% ------------------------------
+% Bibliography
+\printbibliography
+
+\end{document}

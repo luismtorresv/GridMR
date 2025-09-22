@@ -1,0 +1,84 @@
+\usepackage[margin=1in]{geometry}
+\usepackage[skip=10pt plus1pt, indent=10pt]{parskip}
+\usepackage[toc,page]{appendix}
+\usepackage[utf8]{inputenc} % Required for inputting international characters
+\usepackage[T1]{fontenc} % Output font encoding for international characters
+\usepackage{mathpazo} % Palatino font
+\usepackage{titlesec}
+\usepackage{graphicx}
+\usepackage{lipsum}
+\usepackage{caption}
+\usepackage{hyperref}
+\hypersetup{
+    pdftitle={Project 3: Network Interconnection},
+    pdfsubject={Introduction to Computer Networking},
+    pdfauthor={Acosta; Restrepo; Torres},
+}
+\usepackage{float}
+\usepackage{fancyhdr}
+\setlength{\headheight}{13.6pt}
+\urlstyle{same}
+\usepackage[english]{babel}
+\usepackage{csquotes}
+\usepackage[backend=biber, style=ieee]{biblatex}
+\addbibresource{mybibliography.bib}
+\usepackage[figure]{totalcount} % Conditionally printing table of figures.
+\usepackage{tabularray}
+\UseTblrLibrary{booktabs} % Nicer tables
+\usepackage[section]{placeins} % Force floats to appear in current section
+
+% TikZ packages for diagrams
+\usepackage{tikz}
+\usetikzlibrary{shapes.geometric, arrows, positioning, fit, backgrounds, calc}
+\tikzset{
+    block/.style={rectangle, draw, fill=blue!20, text width=3cm, text centered, rounded corners, minimum height=1cm},
+    arrow/.style={thick,->,>=stealth},
+    cloud/.style={draw, ellipse, fill=red!20, node distance=3cm, minimum height=2em},
+    line/.style={draw, thick, -latex'}
+}
+
+% https://www.overleaf.com/learn/latex/Code_listing
+\usepackage{listings}
+\usepackage{xcolor}
+
+\definecolor{codegreen}{rgb}{0,0.6,0}
+\definecolor{codegray}{rgb}{0.5,0.5,0.5}
+\definecolor{codepurple}{rgb}{0.58,0,0.82}
+\definecolor{backcolour}{rgb}{0.95,0.95,0.92}
+
+\lstdefinestyle{mystyle}{
+    basicstyle=\small,
+    backgroundcolor=\color{backcolour},
+    commentstyle=\color{codegreen},
+    keywordstyle=\color{magenta},
+    numberstyle=\tiny\color{codegray},
+    stringstyle=\color{codepurple},
+    basicstyle=\ttfamily\footnotesize,
+    breakatwhitespace=false,
+    breaklines=true,
+    captionpos=t,
+    keepspaces=true,
+    numbers=left,
+    numberstyle=\tiny,
+    numbersep=5pt,
+    showspaces=false,
+    showstringspaces=false,
+    showtabs=false,
+    tabsize=2
+}
+\lstset{style=mystyle}
+
+
+\titleformat{\section}[display]
+  {\normalfont\bfseries}{}{0pt}{\huge}
+
+\captionsetup*[figure]{margin=1.5cm,font=small,labelfont={bf},name={Figure},labelsep=colon,textfont={it}}
+\captionsetup*[table]{margin=1.5cm,font=small,labelfont={bf},name={Table},labelsep=colon,textfont={it}}
+\SetLipsumDefault{1}
+
+
+\pagestyle{fancy}
+\fancyhf{}
+\lhead{\classCode \space \className}
+\lfoot{\projectTitle}
+\rfoot{Page \thepage}
