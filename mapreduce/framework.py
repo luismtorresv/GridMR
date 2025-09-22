@@ -64,8 +64,12 @@ class OutputCollector:
 class TaskTracker:
     """Manages execution of individual map and reduce tasks on worker nodes"""
 
-    def __init__(self, worker_id: str):
+    def __init__(
+        self, worker_id: str, use_nfs: bool = False, nfs_mount: str = "/mnt/gridmr"
+    ):
         self.worker_id = worker_id
+        self.use_nfs = use_nfs
+        self.nfs_mount = nfs_mount
         self.current_tasks: Dict[str, TaskResult] = {}
 
     def execute_map_task(self, task: MapTask, mapper_class: type) -> TaskResult:
@@ -83,18 +87,37 @@ class TaskTracker:
             # Create mapper instance
             mapper = mapper_class()
 
+            # CRITICAL NFS FIX: Map server paths to worker mount paths
+            if self.use_nfs:
+                # Convert server paths (/shared/gridmr/...) to worker mount paths (/mnt/gridmr/...)
+                input_file = task.input_file.replace("/shared/gridmr", self.nfs_mount)
+                output_dir = task.output_dir.replace("/shared/gridmr", self.nfs_mount)
+                print("🔧 NFS path mapping:")
+                print(f"   Original input: {task.input_file}")
+                print(f"   Mapped input: {input_file}")
+                print(f"   Original output: {task.output_dir}")
+                print(f"   Mapped output: {output_dir}")
+            else:
+                input_file = task.input_file
+                output_dir = task.output_dir
+
             # Set up output collector
-            intermediate_dir = os.path.join(task.output_dir, "intermediate")
+            intermediate_dir = os.path.join(output_dir, "intermediate")
             os.makedirs(intermediate_dir, exist_ok=True)
 
+            print(f"📁 Reading input file: {input_file}")
+            print(f"📁 Output directory: {intermediate_dir}")
+
             # Read input file and process
-            with open(task.input_file, "r") as f:
+            with open(input_file, "r") as f:
                 lines = f.readlines()
 
                 # Apply split boundaries if specified
                 start = task.split_start
                 end = task.split_end or len(lines)
                 lines = lines[start:end]
+
+                print(f"📊 Processing {len(lines)} lines from {input_file}")
 
                 # SHUFFLE STEP: Group output by partition (hash of key)
                 # Use consistent number of reducers for proper key distribution
@@ -122,16 +145,36 @@ class TaskTracker:
                     output_file = os.path.join(
                         intermediate_dir, f"map_{task.task_id}_part_{partition_id}.txt"
                     )
+
+                    print(
+                        f"💾 Writing partition {partition_id}: {len(kvs)} key-value pairs to {output_file}"
+                    )
+
                     with open(output_file, "w") as out_f:
                         for kv in kvs:
                             out_f.write(f"{kv.key}\t{kv.value}\n")
-                    output_files.append(output_file)
+
+                    # CRITICAL NFS FIX: Return server paths so master can find the files
+                    if self.use_nfs:
+                        # Convert worker mount path back to server path for master
+                        server_output_file = output_file.replace(
+                            self.nfs_mount, "/shared/gridmr"
+                        )
+                        output_files.append(server_output_file)
+                    else:
+                        output_files.append(output_file)
 
                 result.output_files = output_files
                 result.status = TaskStatus.COMPLETED
                 result.execution_time = time.time() - start_time
 
+                print(f"✅ Map task {task.task_id} completed successfully")
+                print(f"   Processed {len(lines)} lines")
+                print(f"   Generated {len(output_files)} partition files")
+                print(f"   Output files: {output_files}")
+
         except Exception as e:
+            print(f"❌ Map task {task.task_id} failed: {e}")
             result.status = TaskStatus.FAILED
             result.error_message = str(e)
             result.execution_time = time.time() - start_time
@@ -153,12 +196,35 @@ class TaskTracker:
             # Create reducer instance
             reducer = reducer_class()
 
+            # CRITICAL NFS FIX: Map server paths to worker mount paths
+            if self.use_nfs:
+                # Convert server paths to worker mount paths
+                input_files = [
+                    f.replace("/shared/gridmr", self.nfs_mount)
+                    for f in task.input_files
+                ]
+                output_file = task.output_file.replace("/shared/gridmr", self.nfs_mount)
+                print(f"🔧 NFS path mapping for reduce task:")
+                print(f"   Original input files: {task.input_files}")
+                print(f"   Mapped input files: {input_files}")
+                print(f"   Original output: {task.output_file}")
+                print(f"   Mapped output: {output_file}")
+            else:
+                input_files = task.input_files
+                output_file = task.output_file
+
             # Read and merge all input files for this partition
             key_values: Dict[str, List[Any]] = {}
 
-            for input_file in task.input_files:
+            print(
+                f"📖 Reading {len(input_files)} intermediate files for reduce task {task.task_id}"
+            )
+
+            for input_file in input_files:
                 if os.path.exists(input_file):
+                    print(f"   Processing intermediate file: {input_file}")
                     with open(input_file, "r") as f:
+                        line_count = 0
                         for line in f:
                             parts = line.strip().split("\t", 1)
                             if len(parts) == 2:
@@ -166,19 +232,38 @@ class TaskTracker:
                                 if key not in key_values:
                                     key_values[key] = []
                                 key_values[key].append(value)
+                                line_count += 1
+                        print(f"     Read {line_count} key-value pairs")
+                else:
+                    print(f"⚠️  Intermediate file not found: {input_file}")
+
+            print(f"🔑 Reducing {len(key_values)} unique keys")
 
             # Execute reduce for each key
-            os.makedirs(os.path.dirname(task.output_file), exist_ok=True)
-            with open(task.output_file, "w") as out_f:
+            os.makedirs(os.path.dirname(output_file), exist_ok=True)
+            with open(output_file, "w") as out_f:
                 for key, values in key_values.items():
                     for output_kv in reducer.reduce(key, iter(values)):
                         out_f.write(f"{output_kv.key}\t{output_kv.value}\n")
 
-            result.output_files = [task.output_file]
+            # Return server path for master coordination
+            if self.use_nfs:
+                server_output_file = output_file.replace(
+                    self.nfs_mount, "/shared/gridmr"
+                )
+                result.output_files = [server_output_file]
+            else:
+                result.output_files = [output_file]
+
             result.status = TaskStatus.COMPLETED
             result.execution_time = time.time() - start_time
 
+            print(f"✅ Reduce task {task.task_id} completed successfully")
+            print(f"   Processed {len(key_values)} unique keys")
+            print(f"   Output file: {result.output_files[0]}")
+
         except Exception as e:
+            print(f"❌ Reduce task {task.task_id} failed: {e}")
             result.status = TaskStatus.FAILED
             result.error_message = str(e)
             result.execution_time = time.time() - start_time

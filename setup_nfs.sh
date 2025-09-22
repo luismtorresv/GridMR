@@ -34,35 +34,56 @@ print_error() {
 
 setup_nfs_server() {
     echo -e "${BLUE}Setting up NFS Server (Master Node)...${NC}"
-
+    
     # Install NFS server
     sudo apt-get update
     sudo apt-get install -y nfs-kernel-server
-
-    # Create NFS export directory
+    
+    # Get current user UID and GID for proper permissions
+    USER_UID=$(id -u)
+    USER_GID=$(id -g)
+    
+    print_success "Current user: $USER (UID: $USER_UID, GID: $USER_GID)"
+    
+    # Create NFS export directory with proper ownership
     sudo mkdir -p /shared/gridmr/{input,jobs}
     sudo chown -R $USER:$USER /shared/gridmr
     sudo chmod -R 755 /shared/gridmr
-
-    # Configure NFS exports
-    echo "/shared/gridmr *(rw,sync,no_subtree_check,no_root_squash)" | sudo tee -a /etc/exports
-
+    
+    # CRITICAL: Configure NFS exports with all_squash and proper UID/GID mapping
+    # This ensures all client access uses the same UID/GID as the server user
+    export_line="/shared/gridmr *(rw,sync,no_subtree_check,all_squash,anonuid=$USER_UID,anongid=$USER_GID)"
+    
+    # Remove any existing export for this path
+    sudo sed -i '\|/shared/gridmr|d' /etc/exports
+    
+    # Add new export configuration
+    echo "$export_line" | sudo tee -a /etc/exports
+    
+    print_success "NFS export configured: $export_line"
+    
     # Restart NFS services
     sudo systemctl restart nfs-kernel-server
     sudo systemctl enable nfs-kernel-server
-
+    
     # Export the filesystem
     sudo exportfs -ra
-
-    print_success "NFS Server configured"
+    
+    # Show active exports
+    print_success "Active NFS exports:"
+    sudo exportfs -v
+    
+    print_success "NFS Server configured successfully"
     print_success "Export directory: /shared/gridmr"
     print_success "Subdirectories: /shared/gridmr/input, /shared/gridmr/jobs"
-
+    print_success "UID/GID mapping: All clients mapped to UID $USER_UID, GID $USER_GID"
+    
     echo
     echo -e "${YELLOW}Next steps for NFS Server:${NC}"
     echo "1. Add sample data to /shared/gridmr/input/"
     echo "2. Configure AWS Security Group to allow NFS traffic (port 2049)"
-    echo "3. Start GridMR master with: python cli.py master --use-nfs"
+    echo "3. Ensure all worker nodes have same user UID/GID or use the mapping above"
+    echo "4. Start GridMR master with: python cli.py master --use-nfs"
 }
 
 setup_nfs_client() {

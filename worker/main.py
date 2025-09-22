@@ -54,13 +54,15 @@ class Worker:
         self.worker_id = worker_id
         self.master_url = master_url
         self.port = port
-        self.task_tracker = TaskTracker(worker_id)
-        self.current_tasks: Dict[str, TaskResult] = {}
-        self.app = FastAPI(title=f"MapReduce Worker {worker_id}")
-
-        # NFS configuration
         self.use_nfs = use_nfs
         self.nfs_mount = nfs_mount or "/mnt/gridmr"
+
+        # CRITICAL: Pass NFS configuration to TaskTracker
+        self.task_tracker = TaskTracker(
+            worker_id, use_nfs=self.use_nfs, nfs_mount=self.nfs_mount
+        )
+        self.current_tasks: Dict[str, TaskResult] = {}
+        self.app = FastAPI(title=f"MapReduce Worker {worker_id}")
 
         if self.use_nfs:
             self.nfs_input_path = Path(self.nfs_mount) / "input"
