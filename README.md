@@ -85,20 +85,7 @@ The system implements the complete MapReduce paradigm with:
 
 ### 4.1. System Overview
 
-```
-┌─────────────┐    HTTP REST API    ┌─────────────┐
-│   Client    │ ───────────────────► │   Master    │
-└─────────────┘                     │    Node     │
-                                    └──────┬──────┘
-                                           │
-                               ┌───────────┴───────────┐
-                               │                       │
-                               ▼                       ▼
-                    ┌─────────────┐           ┌─────────────┐
-                    │  Worker 1   │           │  Worker N   │
-                    │   Node      │    ...    │   Node      │
-                    └─────────────┘           └─────────────┘
-```
+![Architecture diagram.](report/images/diagrams/architektur.png)
 
 ### 4.2. Component Responsibilities
 

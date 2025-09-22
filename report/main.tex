@@ -78,33 +78,7 @@ GridMR implements a centralized master-worker architecture as illustrated in Fig
 
 \begin{figure}[H]
     \centering
-    \begin{tikzpicture}[node distance=2.5cm, auto]
-        % Define nodes
-        \node [block, fill=green!30] (client) {Client\\Interface};
-        \node [block, fill=orange!30, above right=of client, xshift=2cm] (master) {Master\\Node};
-        \node [block, fill=blue!30, below right=of master, xshift=-1cm, yshift=-1cm] (worker1) {Worker 1\\Node};
-        \node [block, fill=blue!30, below right=of master, xshift=1cm, yshift=-1cm] (worker2) {Worker 2\\Node};
-        \node [block, fill=blue!30, below right=of master, xshift=3cm, yshift=-1cm] (workern) {Worker N\\Node};
-
-        % Define arrows
-        \draw [arrow] (client) -- node[above, sloped] {\small HTTP REST API} (master);
-        \draw [arrow] (master) -- node[above, sloped] {\small Task Assignment} (worker1);
-        \draw [arrow] (master) -- node[above] {\small Task Assignment} (worker2);
-        \draw [arrow] (master) -- node[above, sloped] {\small Task Assignment} (workern);
-
-        % Return arrows
-        \draw [arrow, dashed] (worker1) -- node[below, sloped] {\small Results \& Status} (master);
-        \draw [arrow, dashed] (worker2) -- node[below] {\small Results \& Status} (master);
-        \draw [arrow, dashed] (workern) -- node[below, sloped] {\small Results \& Status} (master);
-
-        % Dots between workers
-        \node at ($(worker2)!0.5!(workern)$) {\Large $\cdots$};
-
-        % Background for worker cluster
-        \begin{pgfonlayer}{background}
-            \node [fit=(worker1)(worker2)(workern), draw, dashed, fill=blue!10, rounded corners, inner sep=0.3cm, label=above:Worker Cluster] {};
-        \end{pgfonlayer}
-    \end{tikzpicture}
+    \includegraphics[width=0.9\linewidth,height=0.90\textheight,keepaspectratio]{images/diagrams/architektur.pdf}
     \caption[System Architecture]{GridMR System Architecture}
     \label{figure:system-architecture}
 \end{figure}
